@@ -76,14 +76,15 @@ export async function ensureWorkspace(user: User): Promise<WorkspaceContext> {
   const existing = await getDoc(userRef);
 
   if (existing.exists()) {
-    const profile = asProfile(existing.data(), user.uid);
-    if (!profile.workspaceId) {
+    const userData = existing.data();
+    const workspaceId = String(userData.workspaceId || '');
+    if (!workspaceId) {
       throw new FirebaseRepositoryError(
         'workspace_not_initialized',
         'Profil akun belum memiliki workspace. Hubungi Admin untuk pemulihan akses.',
       );
     }
-    const memberRef = doc(firestore, membersPath(profile.workspaceId), user.uid);
+    const memberRef = doc(firestore, membersPath(workspaceId), user.uid);
     const member = await getDoc(memberRef);
     if (!member.exists() || member.data().status === 'removed') {
       throw new FirebaseRepositoryError(
@@ -91,6 +92,8 @@ export async function ensureWorkspace(user: User): Promise<WorkspaceContext> {
         'Akun ini tidak memiliki keanggotaan workspace yang aktif.',
       );
     }
+    // Workspace membership is the source of truth for role changes.
+    const profile = asProfile({ ...userData, ...member.data(), workspaceId }, user.uid);
     return { profile, user };
   }
 
@@ -121,6 +124,7 @@ export async function ensureWorkspace(user: User): Promise<WorkspaceContext> {
   batch.set(userRef, {
     uid: user.uid,
     workspaceId,
+    role: 'admin',
     email: user.email || '',
     name: profile.name,
     photoURL: user.photoURL || '',
@@ -654,6 +658,7 @@ export async function joinWorkspace(code: string, user: User): Promise<void> {
     transaction.set(userRef, {
       uid: user.uid,
       workspaceId,
+      role,
       email: user.email || '',
       name: user.displayName || user.email?.split('@')[0] || 'NOC User',
       photoURL: user.photoURL || '',
