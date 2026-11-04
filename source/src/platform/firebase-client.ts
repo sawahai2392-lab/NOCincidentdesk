@@ -1,4 +1,4 @@
-import { collection, doc, getDocs, limit, query, where } from 'firebase/firestore';
+import { collection, doc, getDoc, getDocs, limit, query, where } from 'firebase/firestore';
 import { firebaseAuth, firestore } from './firebase';
 import {
   getCurrentIdToken,
@@ -235,15 +235,9 @@ async function postRequest(path: string, body: Record<string, unknown> = {}): Pr
   if (versionMatch) {
     if (!user) throw new FirebaseApiError('auth_required', 'Silakan masuk terlebih dahulu.', 401);
     const incidentId = decodeURIComponent(versionMatch[1]);
-    const snapshot = await getDocs(
-      query(collection(firestore, 'workspaces', profile.workspaceId, 'incidents', incidentId, 'audit'), limit(1)),
-    );
-    void snapshot;
-    const target = await getDocs(
-      query(collection(firestore, 'workspaces', profile.workspaceId, 'incidents'), where('__name__', '==', incidentId), limit(1)),
-    );
-    if (target.empty) throw new FirebaseApiError('incident_not_found', 'Incident tidak ditemukan.', 404);
-    const incident = { ...target.docs[0].data(), id: incidentId } as Incident;
+    const target = await getDoc(doc(firestore, 'workspaces', profile.workspaceId, 'incidents', incidentId));
+    if (!target.exists()) throw new FirebaseApiError('incident_not_found', 'Incident tidak ditemukan.', 404);
+    const incident = { ...target.data(), id: incidentId } as Incident;
     await createVersion(profile.workspaceId, user, incident, String(body.label || 'Manual snapshot'));
     return ok({ created: true });
   }
