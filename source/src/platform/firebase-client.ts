@@ -1,4 +1,4 @@
-import { collection, doc, getDoc, getDocs, limit, query } from 'firebase/firestore';
+import { collection, getDocs, limit, query } from 'firebase/firestore';
 import { firebaseAuth, firestore } from './firebase';
 import {
   getCurrentIdToken,
