@@ -30,6 +30,7 @@ import { shiftIsoDate } from './progress-autoparse';
 import { getSlaNotice } from './sla-notifications';
 import { availableStatusOptions, bytesLabel, defaultSettings, emptyIncident, formatReport, incidentResolutionMinutes, incidentSlaState, incidentTitle, localDate, localDateTime, localTime, newId, roleLabel, statusTone, validateIncident, type AuditEntry, type BootstrapData, type Incident, type IncidentStatus, type IncidentVersion, type Role, type SettingsData } from './domain';
 import { clearAllIncidentRecoveries, clearIncidentRecovery, readIncidentRecovery, storeIncidentRecovery } from './incident-recovery';
+import { decideRealtimeDraftUpdate, shouldApplyRemoteListUpdate } from './realtime-sync';
 type View = 'dashboard' | 'editor' | 'archive' | 'trash' | 'tracker' | 'handover' | 'operations' | 'reliability' | 'risk' | 'settings' | 'team';
 type User = {
     userId: string;
@@ -253,25 +254,24 @@ function App() {
                 setData(current => {
                     if (!current) return current;
                     const existing = current.incidents.find(item => item.id === incoming.id);
-                    if (existing && existing.revision > incoming.revision) return current;
+                    if (!shouldApplyRemoteListUpdate(existing, incoming)) return current;
                     return { ...current, incidents: existing
                         ? current.incidents.map(item => item.id === incoming.id ? incoming : item)
                         : [incoming, ...current.incidents] };
                 });
                 setOpsSignal(value => value + 1);
                 setDraft(current => {
-                    if (current?.id !== incoming.id || saveInFlightRef.current) return current;
-                    const dirty = JSON.stringify(current) !== lastSavedRef.current;
-                    if (dirty) {
-                        const baseline = lastSavedRef.current ? JSON.parse(lastSavedRef.current) as Incident : null;
-                        const changedRemotely = incoming.revision > current.revision
-                            || (baseline && JSON.stringify(incoming) !== JSON.stringify(baseline));
-                        if (changedRemotely && incoming.revision >= current.revision) {
-                            setRemoteConflict(existing => !existing || existing.revision < incoming.revision ? clone(incoming) : existing);
-                        }
+                    const decision = decideRealtimeDraftUpdate({
+                        current,
+                        incoming,
+                        baselineSerialized: lastSavedRef.current,
+                        saveInFlight: Boolean(saveInFlightRef.current),
+                    });
+                    if (decision === 'ignore' || decision === 'preserve') return current;
+                    if (decision === 'conflict') {
+                        setRemoteConflict(existing => !existing || existing.revision < incoming.revision ? clone(incoming) : existing);
                         return current;
                     }
-                    if (incoming.revision < current.revision) return current;
                     lastSavedRef.current = JSON.stringify(incoming);
                     clearIncidentRecovery(data?.profile.workspaceId, data?.profile.userId, incoming.id);
                     return clone(incoming);

@@ -9,6 +9,8 @@ on:
       - 'fix/phase2-*'
       - 'fix/phase3-*'
       - 'fix/phase4-*'
+      - 'fix/phase5-*'
+      - 'fix/phase6-*'
   workflow_dispatch:
 
 permissions:
@@ -55,3 +57,7 @@ jobs:
       - name: Client-side SLA notice tests
         working-directory: source
         run: npm run test:sla
+
+      - name: Offline recovery and realtime sync tests
+        working-directory: source
+        run: npm run test:recovery
