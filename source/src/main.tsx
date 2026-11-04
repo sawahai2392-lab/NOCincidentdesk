@@ -35,6 +35,7 @@ import './cutpoint-polish.css';
 import './responsive-viewport-fix.css';
 import './sidebar-command-center.css';
 import './glass-float-theme.css';
+import './workspace-restore-recovery.css';
 
 createRoot(document.getElementById('root')!).render(
     <StrictMode>
