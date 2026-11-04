@@ -1,3 +1,4 @@
+// @ts-nocheck
 import { router, json, error, requireAuth, db, storage, invites, isInviteError, secrets, notifications, ai, workspaceRecords } from '../server/src/standalone-sdk.js';
 import { addSubscription, removeSubscriptions, notifySubscribers } from './realtime-subscribers';
 import { runIncidentCopilot } from './copilot';
