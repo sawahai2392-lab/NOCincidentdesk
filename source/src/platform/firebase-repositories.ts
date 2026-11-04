@@ -37,29 +37,34 @@ import {
 } from '../domain';
 
 
-// Keep Firebase's overloaded generic signatures intact. Using Parameters<> on
-// overloaded SDK functions collapses the overload set to its last signature,
-// which widens snapshots to unknown and breaks the optional transaction options.
-const getDoc = (async (...args: any[]) => {
-  const snapshot = await firestoreGetDoc(...args);
-  recordDocumentRead();
-  return snapshot;
+// Preserve the SDK overloads at call sites while delegating through Reflect.apply.
+// Parameters<> collapses Firebase's overloads and loses the snapshot generics.
+const getDoc = ((...args: any[]) => {
+  const pending = Reflect.apply(firestoreGetDoc, undefined, args);
+  return pending.then((snapshot: Awaited<typeof pending>) => {
+    recordDocumentRead();
+    return snapshot;
+  });
 }) as typeof firestoreGetDoc;
 
-const getDocs = (async (...args: any[]) => {
-  const snapshot = await firestoreGetDocs(...args);
-  recordQueryRead(snapshot.size);
-  return snapshot;
+const getDocs = ((...args: any[]) => {
+  const pending = Reflect.apply(firestoreGetDocs, undefined, args);
+  return pending.then((snapshot: Awaited<typeof pending>) => {
+    recordQueryRead(snapshot.size);
+    return snapshot;
+  });
 }) as typeof firestoreGetDocs;
 
-const setDoc = (async (...args: any[]) => {
-  await firestoreSetDoc(...args);
-  recordDirectWrite();
+const setDoc = ((...args: any[]) => {
+  const pending = Reflect.apply(firestoreSetDoc, undefined, args);
+  return pending.then(() => {
+    recordDirectWrite();
+  });
 }) as typeof firestoreSetDoc;
 
-const runTransaction = (async (...args: any[]) => {
+const runTransaction = ((...args: any[]) => {
   recordTransaction();
-  return firestoreRunTransaction(...args);
+  return Reflect.apply(firestoreRunTransaction, undefined, args);
 }) as typeof firestoreRunTransaction;
 
 const now = () => Date.now();
