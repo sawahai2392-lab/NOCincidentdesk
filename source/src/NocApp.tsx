@@ -35,6 +35,11 @@ import { mergeIncidentPage } from './incident-pagination';
 import { analyzeWorkspaceImport } from './workspace-import';
 import { planSelectiveWorkspaceRestore } from './workspace-restore-plan';
 import { executeSelectiveWorkspaceRestore } from './workspace-restore-execution';
+import {
+    canReactivateRouteMasterBatch,
+    getRestoreOperationDisplayStatus,
+    restoreOperationStatusLabel,
+} from './workspace-restore-recovery';
 type View = 'dashboard' | 'editor' | 'archive' | 'trash' | 'tracker' | 'handover' | 'operations' | 'reliability' | 'risk' | 'settings' | 'team';
 type User = {
     userId: string;
@@ -180,6 +185,9 @@ function App() {
     const [workspaceRestoreBusy, setWorkspaceRestoreBusy] = useState(false);
     const [workspaceRestoreProgress, setWorkspaceRestoreProgress] = useState({ stage: '', completed: 0, total: 0, message: '' });
     const [workspaceRestoreResult, setWorkspaceRestoreResult] = useState<any>(null);
+    const [workspaceRestoreRecovery, setWorkspaceRestoreRecovery] = useState<any>(null);
+    const [workspaceRestoreRecoveryBusy, setWorkspaceRestoreRecoveryBusy] = useState(false);
+    const [workspaceRestoreRecoveryAction, setWorkspaceRestoreRecoveryAction] = useState('');
     const [masterImportProgress, setMasterImportProgress] = useState(0);
     const [versions, setVersions] = useState<IncidentVersion[]>([]);
     const [historyOpen, setHistoryOpen] = useState(false);
@@ -218,6 +226,18 @@ function App() {
     async function loadRouteMaster() { const response = await api.get('/api/route-master'); setRouteMaster((response.data.items || []) as RouteMasterPair[]); setRouteMasterMeta((response.data.meta || null) as RouteMasterMeta | null); }
     async function loadGeminiStatus() { try { const response = await api.get('/api/integrations/gemini/status'); setGeminiStatus(response.data as GeminiStatus); } catch { setGeminiStatus({ configured: false, provider: 'Google Gemini', model: 'gemini-3.6-flash' }); } }
     async function loadOpsUnread() { try { const response = await api.get('/api/operations/alerts/summary'); setOpsUnread(Number(response.data.unreadCount) || 0); } catch { setOpsUnread(0); } }
+    async function loadWorkspaceRestoreRecovery() {
+        if (!data || !isAdmin) return;
+        setWorkspaceRestoreRecoveryBusy(true);
+        try {
+            const response = await api.get('/api/workspace-restore/recovery');
+            setWorkspaceRestoreRecovery(response.data || null);
+        } catch (err) {
+            notify(errorMessage(err), 'error');
+        } finally {
+            setWorkspaceRestoreRecoveryBusy(false);
+        }
+    }
     async function loadWorkspace() {
         setLoading(true);
         try {
@@ -242,6 +262,9 @@ function App() {
     useEffect(() => { document.documentElement.dataset.density = density; localStorage.setItem('noc-density', density); }, [density]);
     useEffect(() => { localStorage.setItem('noc-sidebar-collapsed', String(sidebarCollapsed)); }, [sidebarCollapsed]);
     useEffect(() => { if (view !== 'editor') { setFocusMode(false); setQuickUpdateOpen(false); } if (['dashboard', 'operations', 'reliability', 'risk', 'archive', 'tracker', 'handover', 'team'].includes(view)) localStorage.setItem('noc-last-view', view); }, [view]);
+    useEffect(() => {
+        if (view === 'settings' && isAdmin) void loadWorkspaceRestoreRecovery();
+    }, [view, isAdmin, data?.profile.workspaceId]);
     useEffect(() => {
         const workspaceId = data?.profile.workspaceId; const userId = data?.profile.userId; if (!workspaceId || !userId) return;
         const key = `noc-running:${workspaceId}:${userId}`;
@@ -596,11 +619,24 @@ function App() {
         setWorkspaceRestoreBusy(true);
         setWorkspaceRestoreResult(null);
         setWorkspaceRestoreProgress({ stage: 'validating', completed: 0, total: 1, message: 'Memvalidasi pilihan restore.' });
+        let operationId = '';
         try {
             const currentSettingsResponse = workspaceRestoreSelection.settings
                 ? await api.get('/api/settings')
                 : null;
             const currentSettings = currentSettingsResponse?.data?.settings || data.settings;
+            const operation = await api.post('/api/workspace-restore/operations', {
+                kind: 'selective-restore',
+                sourceFileName: workspaceImportFileName,
+                selectedSections: [
+                    ...(workspaceRestoreSelection.settings ? ['settings'] : []),
+                    ...(workspaceRestoreSelection.routeMaster ? ['routeMaster'] : []),
+                ],
+                message: 'Selective workspace restore dimulai.',
+            });
+            operationId = String(operation.data.id || '');
+            if (!operationId) throw new Error('Audit record restore tidak berhasil dibuat. Tidak ada data yang diubah.');
+
             const result = await executeSelectiveWorkspaceRestore({
                 bundle: workspaceImportBundle,
                 preflight: workspaceImportReport,
@@ -642,7 +678,26 @@ function App() {
                 },
                 onProgress: (progress) => setWorkspaceRestoreProgress(progress),
             });
-            setWorkspaceRestoreResult(result);
+            setWorkspaceRestoreResult({ ...result, operationId });
+            try {
+                await api.put(`/api/workspace-restore/operations/${encodeURIComponent(operationId)}`, {
+                    status: result.status,
+                    stage: result.status,
+                    message: result.status === 'completed'
+                        ? 'Selective restore selesai dan diverifikasi.'
+                        : result.status === 'needs-review'
+                            ? 'Status commit belum dapat dipastikan dan memerlukan pemeriksaan Admin.'
+                            : result.status === 'partial'
+                                ? 'Restore berakhir dengan keadaan parsial.'
+                                : 'Selective restore gagal.',
+                    errors: result.errors,
+                    warnings: result.warnings,
+                    stagedBatchId: result.stagedBatchId,
+                    settingsRolledBack: result.settingsRolledBack,
+                });
+            } catch {
+                notify('Restore selesai diproses, tetapi audit record gagal diperbarui. Periksa riwayat recovery.', 'error');
+            }
             if (result.status === 'completed') {
                 notify('Selective restore selesai. Data yang dipilih sudah diverifikasi.', 'success');
                 setWorkspaceRestoreConfirmOpen(false);
@@ -655,12 +710,110 @@ function App() {
                     ? 'Restore gagal. Workspace Settings sebelumnya berhasil dikembalikan.'
                     : 'Restore gagal. Batch aktif tidak diganti.', 'error');
             }
-            // Refresh visible state after success, compensation, or an ambiguous commit.
             try { await loadWorkspace(); } catch { /* Keep the execution report visible when refresh is unavailable. */ }
+            try { await loadWorkspaceRestoreRecovery(); } catch { /* Keep the execution report visible. */ }
         } catch (err) {
+            if (operationId) {
+                try {
+                    await api.put(`/api/workspace-restore/operations/${encodeURIComponent(operationId)}`, {
+                        status: 'failed',
+                        stage: 'failed',
+                        message: 'Restore tidak dapat diselesaikan.',
+                        errors: [errorMessage(err)],
+                    });
+                } catch { /* A still-running audit row will be marked as needs-review by the recovery view after one hour. */ }
+            }
             notify(errorMessage(err), 'error');
         } finally {
             setWorkspaceRestoreBusy(false);
+        }
+    }
+
+    async function reactivatePreviousRouteMaster(batch: any) {
+        if (!data || !isAdmin || !workspaceRestoreRecovery || workspaceRestoreRecoveryRecoveryBusy) return;
+        if (!canReactivateRouteMasterBatch(batch, workspaceRestoreRecovery.recovery?.activeBatchId || null)) return;
+        const label = batch.sourceFileName || batch.id;
+        if (!window.confirm(`Aktifkan kembali Route Master "${label}"? Batch aktif saat ini tetap disimpan untuk recovery berikutnya.`)) return;
+        setWorkspaceRestoreRecoveryAction(batch.id);
+        let operationId = '';
+        try {
+            const operation = await api.post('/api/workspace-restore/operations', {
+                kind: 'reactivate-route-master',
+                targetBatchId: batch.id,
+                message: 'Reaktivasi batch Route Master dimulai.',
+            });
+            operationId = String(operation.data.id || '');
+            if (!operationId) throw new Error('Audit record recovery gagal dibuat.');
+            const response = await api.post('/api/route-master/recovery/reactivate', {
+                batchId: batch.id,
+                expectedCurrentBatchId: workspaceRestoreRecovery.recovery.activeBatchId || null,
+            });
+            await api.put(`/api/workspace-restore/operations/${encodeURIComponent(operationId)}`, {
+                status: 'completed',
+                stage: 'completed',
+                message: 'Batch Route Master lama berhasil diaktifkan kembali.',
+                activeBatchId: response.data.activeBatchId,
+            });
+            await loadRouteMaster();
+            await loadWorkspaceRestoreRecovery();
+            notify('Route Master berhasil dikembalikan ke batch sebelumnya.', 'success');
+        } catch (err) {
+            if (operationId) {
+                try {
+                    await api.put(`/api/workspace-restore/operations/${encodeURIComponent(operationId)}`, {
+                        status: 'failed',
+                        stage: 'failed',
+                        message: 'Reaktivasi Route Master gagal.',
+                        errors: [errorMessage(err)],
+                    });
+                } catch { /* Keep the original action error visible. */ }
+            }
+            notify(errorMessage(err), 'error');
+        } finally {
+            setWorkspaceRestoreRecoveryAction('');
+        }
+    }
+
+    async function cleanupStaleRouteMaster(batch: any) {
+        if (!data || !isAdmin || !workspaceRestoreRecovery || workspaceRestoreRecoveryAction) return;
+        if (!batch.stale || batch.status !== 'staging') return;
+        if (!window.confirm(`Hapus batch staging yang tidak aktif selama lebih dari 24 jam? ${batch.id}. Hanya batch staging ini dan chunk-nya yang akan dihapus.`)) return;
+        setWorkspaceRestoreRecoveryAction(batch.id);
+        let operationId = '';
+        try {
+            const operation = await api.post('/api/workspace-restore/operations', {
+                kind: 'cleanup-stale-route-master',
+                targetBatchId: batch.id,
+                message: 'Cleanup stale Route Master staging dimulai.',
+            });
+            operationId = String(operation.data.id || '');
+            if (!operationId) throw new Error('Audit record cleanup gagal dibuat.');
+            const response = await api.post('/api/route-master/recovery/cleanup-stale', {
+                batchId: batch.id,
+                expectedLastActivityAt: batch.lastActivityAt,
+            });
+            await api.put(`/api/workspace-restore/operations/${encodeURIComponent(operationId)}`, {
+                status: 'completed',
+                stage: 'completed',
+                message: 'Batch staging terbengkalai berhasil dibersihkan.',
+                deletedChunks: Number(response.data.deletedChunks) || 0,
+            });
+            await loadWorkspaceRestoreRecovery();
+            notify(`Staging batch dibersihkan. ${Number(response.data.deletedChunks) || 0} chunk dihapus.`, 'success');
+        } catch (err) {
+            if (operationId) {
+                try {
+                    await api.put(`/api/workspace-restore/operations/${encodeURIComponent(operationId)}`, {
+                        status: 'failed',
+                        stage: 'failed',
+                        message: 'Cleanup staging Route Master gagal.',
+                        errors: [errorMessage(err)],
+                    });
+                } catch { /* Keep the original action error visible. */ }
+            }
+            notify(errorMessage(err), 'error');
+        } finally {
+            setWorkspaceRestoreRecoveryAction('');
         }
     }
     async function saveSettings() { try { const response = await api.put('/api/settings', { ...settingsDraft, _expectedUpdatedAt: Number(data?.settings?.updatedAt) || 0 }); const saved = response.data.settings as SettingsData; setData(current => current ? { ...current, settings: saved } : current); setSettingsDraft(clone(saved)); notify('Master data diperbarui.', 'success'); } catch (err) { notify(errorMessage(err), 'error'); } }
