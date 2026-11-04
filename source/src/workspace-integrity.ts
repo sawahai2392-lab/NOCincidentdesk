@@ -18,6 +18,7 @@ export interface IntegrityHistorySet {
 }
 
 export interface WorkspaceIntegritySnapshot {
+  workspaceId: string;
   workspace: { exists: boolean; data: Record<string, unknown> };
   members: IntegrityDocument[];
   membersTruncated: boolean;
@@ -161,7 +162,7 @@ export function buildWorkspaceIntegrityReport(
       },
     );
     evaluate(
-      !text(member.data.workspaceId) || text(member.data.workspaceId) === text(workspace.id),
+      !text(member.data.workspaceId) || text(member.data.workspaceId) === snapshot.workspaceId,
       'warning',
       {
         id: 'member:workspace-id:' + member.id,
@@ -235,6 +236,13 @@ export function buildWorkspaceIntegrityReport(
           },
         });
       } else if (key) {
+        evaluate(key.id === keyId, 'critical', {
+          id: 'incident-key:path:' + incident.id,
+          category: 'incident-keys',
+          title: 'Document ID index incident tidak sesuai',
+          detail: 'ID dokumen incidentKeys harus merupakan encoding dari normalizedIncidentId.',
+          entityId: key.id,
+        });
         const keyMatches = key.data.active === true
           && text(key.data.incidentId) === incident.id
           && text(key.data.normalizedKey) === normalizedKey;
