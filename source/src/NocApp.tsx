@@ -27,6 +27,7 @@ import ParserImportModal from './ParserImportModal';
 import EscalationEmailPanel from './EscalationEmailPanel';
 import ProgressAutoparsePanel from './ProgressAutoparsePanel';
 import { shiftIsoDate } from './progress-autoparse';
+import { getSlaNotice } from './sla-notifications';
 import { availableStatusOptions, bytesLabel, defaultSettings, emptyIncident, formatReport, incidentResolutionMinutes, incidentSlaState, incidentTitle, localDate, localDateTime, localTime, newId, roleLabel, statusTone, validateIncident, type AuditEntry, type BootstrapData, type Incident, type IncidentStatus, type IncidentVersion, type Role, type SettingsData } from './domain';
 import { clearAllIncidentRecoveries, clearIncidentRecovery, readIncidentRecovery, storeIncidentRecovery } from './incident-recovery';
 type View = 'dashboard' | 'editor' | 'archive' | 'trash' | 'tracker' | 'handover' | 'operations' | 'reliability' | 'risk' | 'settings' | 'team';
@@ -191,6 +192,8 @@ function App() {
     const lastSavedRef = useRef('');
     const saveTimerRef = useRef<number | null>(null);
     const socketRef = useRef<ReturnType<typeof ws.connect> | null>(null);
+    const slaNoticeMemoryRef = useRef<Set<string>>(new Set());
+    const slaNoticeInitialRef = useRef<Set<string>>(new Set());
     const notify = (text: string, tone: 'success' | 'error' | 'info' = 'info') => { if (tone === 'success') sonnerToast.success(text); else if (tone === 'error') sonnerToast.error(text); else sonnerToast.message(text); };
     const upsertIncident = (incident: Incident) => { setData(previous => previous ? { ...previous, incidents: previous.incidents.some(item => item.id === incident.id) ? previous.incidents.map(item => item.id === incident.id ? incident : item) : [incident, ...previous.incidents] } : previous); };
     async function loadRouteMaster() { const response = await api.get('/api/route-master'); setRouteMaster((response.data.items || []) as RouteMasterPair[]); setRouteMasterMeta((response.data.meta || null) as RouteMasterMeta | null); }
@@ -253,7 +256,7 @@ function App() {
         return () => { if (connection.connectionId) void api.post('/api/subscriptions/remove', { entity_type: 'workspace', entity_id: workspaceId, connection_id: connection.connectionId }); connection.disconnect(); socketRef.current = null; };
     }, [data?.profile.workspaceId]);
     useEffect(() => { if (!draft || !data) return; const serialized = JSON.stringify(draft); if (serialized === lastSavedRef.current) return; setSaveState('pending'); if (saveTimerRef.current) window.clearTimeout(saveTimerRef.current); saveTimerRef.current = window.setTimeout(() => void persistDraft(draft), 900); return () => { if (saveTimerRef.current) window.clearTimeout(saveTimerRef.current); }; }, [draft]);
-    useEffect(() => { const handleOnline = () => { setOnline(true); if (draft && JSON.stringify(draft) !== lastSavedRef.current) void persistDraft(draft); }; const handleOffline = () => setOnline(false); window.addEventListener('online', handleOnline); window.addEventListener('offline', handleOffline); const timer = window.setInterval(() => setClock(Date.now()), 60000); return () => { window.removeEventListener('online', handleOnline); window.removeEventListener('offline', handleOffline); window.clearInterval(timer); }; }, [draft]);
+    useEffect(() => { const handleOnline = () => { setOnline(true); if (draft && JSON.stringify(draft) !== lastSavedRef.current) void persistDraft(draft); }; const handleOffline = () => setOnline(false); const refreshClock = () => setClock(Date.now()); window.addEventListener('online', handleOnline); window.addEventListener('offline', handleOffline); document.addEventListener('visibilitychange', refreshClock); const timer = window.setInterval(refreshClock, 60000); return () => { window.removeEventListener('online', handleOnline); window.removeEventListener('offline', handleOffline); document.removeEventListener('visibilitychange', refreshClock); window.clearInterval(timer); }; }, [draft]);
     useEffect(() => { if (!draft || !data) return; const serialized = JSON.stringify(draft); if (serialized === lastSavedRef.current) return; storeIncidentRecovery(draft, data.profile.workspaceId, data.profile.userId); }, [draft, data?.profile.workspaceId, data?.profile.userId]);
     useEffect(() => { const blockExit = (event: BeforeUnloadEvent) => { if (saveState === 'pending' || saveState === 'saving' || saveState === 'error') { event.preventDefault(); event.returnValue = ''; } }; window.addEventListener('beforeunload', blockExit); return () => window.removeEventListener('beforeunload', blockExit); }, [saveState]);
     async function completeAuthentication(nextUser: User) {
@@ -415,6 +418,70 @@ function App() {
     const trashIncidents = useMemo(() => allIncidents.filter(item => Boolean(item.deletedAt)), [allIncidents]);
     const filteredIncidents = useMemo(() => sortedIncidents.filter(incident => { const haystack = `${incidentTitle(incident)} ${incident.picArea} ${incident.picName} ${incident.rootCause}`.toLowerCase(); return haystack.includes(search.toLowerCase()) && (statusFilter === 'All' || incident.status === statusFilter) && (severityFilter === 'All' || incident.severity === severityFilter); }), [sortedIncidents, search, statusFilter, severityFilter]);
     const activeIncidents = useMemo(() => sortedIncidents.filter(item => item.status === 'Open' || item.status === 'Monitoring'), [sortedIncidents]);
+    useEffect(() => {
+        const workspaceId = data?.profile.workspaceId;
+        const userId = data?.profile.userId;
+        if (!data || !workspaceId || !userId) return;
+
+        const scope = `${workspaceId}:${userId}`;
+        const storageKey = `noc-sla-notice-keys:${scope}`;
+        const initialKey = `noc-sla-initialized:${scope}`;
+        const seen = new Set(slaNoticeMemoryRef.current);
+        let firstPass = !slaNoticeInitialRef.current.has(scope);
+
+        try {
+            const stored = JSON.parse(localStorage.getItem(storageKey) || '[]');
+            if (Array.isArray(stored)) stored.forEach((key) => { if (typeof key === 'string') seen.add(key); });
+            firstPass = localStorage.getItem(initialKey) !== '1';
+        } catch { /* Memory fallback keeps deduplication for this app session. */ }
+
+        const notices = activeIncidents
+            .map((incident) => getSlaNotice(incident, data.settings || defaultSettings, clock))
+            .filter((notice): notice is NonNullable<typeof notice> => Boolean(notice))
+            .filter((notice) => !seen.has(notice.fingerprint));
+
+        slaNoticeInitialRef.current.add(scope);
+        if (!notices.length) {
+            try { if (firstPass) localStorage.setItem(initialKey, '1'); } catch { /* Storage may be disabled. */ }
+            return;
+        }
+
+        notices.forEach((notice) => seen.add(notice.fingerprint));
+        slaNoticeMemoryRef.current = seen;
+        try {
+            localStorage.setItem(storageKey, JSON.stringify([...seen].slice(-300)));
+            localStorage.setItem(initialKey, '1');
+        } catch { /* The in-memory set still prevents duplicate notices in this session. */ }
+
+        const counts = notices.reduce((total, notice) => {
+            total[notice.stage] = (total[notice.stage] || 0) + 1;
+            return total;
+        }, {} as Record<string, number>);
+        const detail = [
+            counts.due_soon ? `${counts.due_soon} hampir melewati SLA` : '',
+            counts.overdue ? `${counts.overdue} overdue` : '',
+            counts.escalated ? `${counts.escalated} eskalasi L2` : '',
+            counts.critical ? `${counts.critical} eskalasi L3` : '',
+        ].filter(Boolean).join(' · ');
+        const browserNotificationAllowed = 'Notification' in window
+            && Notification.permission === 'granted'
+            && document.hidden;
+
+        if (browserNotificationAllowed) {
+            const title = notices.length === 1 ? notices[0].title : `NOC Desk · ${notices.length} SLA notice`;
+            const body = notices.length === 1 ? notices[0].body : detail;
+            const browserNotice = new Notification(title, {
+                body,
+                tag: `noc-sla-${workspaceId}`,
+                renotify: false,
+            });
+            browserNotice.onclick = () => window.focus();
+        } else if (firstPass || notices.length > 1) {
+            sonnerToast.message(`SLA Watch · ${notices.length} incident perlu perhatian`, { description: detail });
+        } else {
+            sonnerToast.message(notices[0].title, { description: notices[0].body });
+        }
+    }, [activeIncidents, data?.profile.workspaceId, data?.profile.userId, data?.settings, clock, notificationReady]);
     const runningItems = useMemo<RunningItem[]>(() => { const activeById = new Map(activeIncidents.map(item => [item.id, item])); const severityRank: Record<string, number> = { Critical: 0, Major: 1, Minor: 2 }; return runningIds.map(id => activeById.get(id)).filter((item): item is Incident => Boolean(item)).map(incident => { const sla = incidentSlaState(incident, data?.settings || defaultSettings, clock); return { incident, overdue: sla.overdue, ageMinutes: sla.ageMinutes, limitMinutes: sla.limitMinutes, lastUpdateAt: sla.lastUpdateAt }; }).sort((a, b) => Number(b.overdue) - Number(a.overdue) || (severityRank[a.incident.severity] ?? 9) - (severityRank[b.incident.severity] ?? 9) || b.ageMinutes - a.ageMinutes); }, [activeIncidents, runningIds, data?.settings, clock]);
     const role = data?.profile.role || 'operator'; const isAdmin = role === 'admin'; const canReview = role !== 'operator';
     useEffect(() => { const handleRunningShortcut = (event: KeyboardEvent) => { const target = event.target as HTMLElement | null; const typing = Boolean(target?.closest('input,textarea,select,[contenteditable=true]')); if ((event.ctrlKey || event.metaKey) && event.key.toLowerCase() === 'k') { event.preventDefault(); if (event.shiftKey) setRunningSwitcherOpen(true); else setCommandOpen(true); return; } if (!typing && event.altKey && (event.key === 'ArrowUp' || event.key === 'ArrowDown') && runningItems.length) { event.preventDefault(); const currentIndex = Math.max(0, runningItems.findIndex(item => item.incident.id === draft?.id)); const delta = event.key === 'ArrowDown' ? 1 : -1; const next = runningItems[(currentIndex + delta + runningItems.length) % runningItems.length]; if (next) void switchIncident(next.incident); } }; window.addEventListener('keydown', handleRunningShortcut); return () => window.removeEventListener('keydown', handleRunningShortcut); }, [runningItems, draft]);
