@@ -10,6 +10,7 @@ on:
       - 'fix/phase9-*'
       - 'feat/phase10-*'
       - 'feat/phase11-*'
+      - 'feat/phase12-*'
   pull_request:
     branches:
       - feat/tt-editor-quick-updates
@@ -24,6 +25,7 @@ on:
       - 'fix/phase8-*'
       - 'fix/phase9-*'
       - 'feat/phase10-*'
+      - 'feat/phase11-*'
   workflow_dispatch:
 
 permissions:
@@ -94,3 +96,4 @@ jobs:
       - name: Workspace import dry-run tests
         working-directory: source
         run: npm run test:import
+
