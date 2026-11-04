@@ -194,6 +194,7 @@ export async function executeSelectiveWorkspaceRestore(
   let stagedBatchId: string | null = null;
   let settingsApplied = false;
   let routeMasterCommitted = false;
+  let routeMasterCommitAcknowledged = false;
   const expectedFingerprint = input.selection.routeMaster ? fingerprintRouteMaster(routeMaster) : '';
 
   try {
@@ -236,6 +237,7 @@ export async function executeSelectiveWorkspaceRestore(
       };
       try {
         await dependencies.commitRouteMaster(stagedBatchId, metadata);
+        routeMasterCommitAcknowledged = true;
       } catch (commitError) {
         // A lost response can occur after the atomic Firestore batch already committed.
         let active: WorkspaceRestoreActiveRouteMaster;
@@ -252,6 +254,7 @@ export async function executeSelectiveWorkspaceRestore(
         if (active.meta?.currentBatchId !== stagedBatchId || !sameRouteMasterItems(active.items, routeMaster)) {
           throw commitError;
         }
+        routeMasterCommitAcknowledged = true;
         warnings.push('Respons commit Route Master terputus, tetapi batch aktif berhasil diverifikasi setelahnya.');
       }
 
@@ -278,7 +281,15 @@ export async function executeSelectiveWorkspaceRestore(
     };
   } catch (error) {
     const message = error instanceof Error ? error.message : 'Selective restore gagal.';
-    if (settingsApplied && input.selection.routeMaster && !routeMasterCommitted && previousSettings) {
+    if (settingsApplied && input.selection.routeMaster && routeMasterCommitAcknowledged && !routeMasterCommitted) {
+      return failure(
+        [message, 'Commit Route Master sudah diakui tetapi status aktif belum dapat diverifikasi.'],
+        stagedBatchId,
+        'needs-review',
+        [...warnings, 'Workspace Settings tidak dikembalikan otomatis karena batch Route Master mungkin sudah aktif. Periksa batch aktif sebelum tindakan lanjutan.'],
+      );
+    }
+    if (settingsApplied && input.selection.routeMaster && !routeMasterCommitted && !routeMasterCommitAcknowledged && previousSettings) {
       emit(dependencies, 'rolling-back-settings', 0, 1, 'Commit Route Master gagal; mengembalikan Workspace Settings sebelumnya.');
       try {
         await dependencies.saveSettings(previousSettings);
