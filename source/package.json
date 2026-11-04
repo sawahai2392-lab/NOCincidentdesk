@@ -14,7 +14,8 @@
     "test:rules": "firebase emulators:exec --project demo-noc-incident-desk --only firestore \"npm run test:rules:unit\"",
     "typecheck": "tsc --noEmit",
     "test:sla": "node --test tests/sla-notifications.test.mjs",
-    "test:recovery": "node --test tests/incident-recovery.test.mjs tests/realtime-sync.test.mjs"
+    "test:recovery": "node --test tests/incident-recovery.test.mjs tests/realtime-sync.test.mjs",
+    "test:payload": "node --test tests/firestore-payload.test.mjs"
   },
   "dependencies": {
     "@floating-ui/react": "^0.27.16",

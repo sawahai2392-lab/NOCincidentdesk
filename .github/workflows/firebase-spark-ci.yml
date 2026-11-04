@@ -1,6 +1,10 @@
 name: Firebase Spark CI
 
 on:
+  push:
+    branches:
+      - 'fix/phase5-*'
+      - 'fix/phase6-*'
   pull_request:
     branches:
       - feat/tt-editor-quick-updates
@@ -61,3 +65,7 @@ jobs:
       - name: Offline recovery and realtime sync tests
         working-directory: source
         run: npm run test:recovery
+
+      - name: Firestore document payload guard tests
+        working-directory: source
+        run: npm run test:payload

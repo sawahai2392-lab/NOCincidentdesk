@@ -18,6 +18,7 @@ import {
 } from 'firebase/firestore';
 import type { User } from 'firebase/auth';
 import { firestore } from './firebase';
+import { isFirestoreIncidentPayloadSafe, measureFirestoreDocumentBytes, MAX_FIRESTORE_INCIDENT_DOCUMENT_BYTES } from '../firestore-payload';
 import {
   defaultSettings,
   emptyIncident,
@@ -366,6 +367,11 @@ export async function createIncident(
 ): Promise<Incident> {
   const id = newId();
   const incident = normalizeIncidentRecord({ ...value, id }, user);
+  const payload = { ...incident, normalizedIncidentId: normalizeKey(incident.incidentId) };
+  if (!isFirestoreIncidentPayloadSafe(payload)) {
+    const sizeKb = Math.ceil(measureFirestoreDocumentBytes(payload) / 1024);
+    throw new FirebaseRepositoryError('incident_payload_too_large', `Data incident ${sizeKb} KiB melebihi batas aman ${Math.round(MAX_FIRESTORE_INCIDENT_DOCUMENT_BYTES / 1024)} KiB. Ringkas progress atau teks yang terlalu panjang sebelum menyimpan.`);
+  }
   const validationError = validateIncidentPayload(incident);
   if (validationError) {
     throw new FirebaseRepositoryError(validationError, 'Data incident belum memenuhi validasi workflow.');
@@ -438,6 +444,11 @@ export async function saveIncident(
     }
     if (!progressHistoryChangeIsValid(current.progress, next.progress)) {
       throw new FirebaseRepositoryError('progress_history_immutable', 'Urutan progress lama tidak boleh diubah; update baru harus ditambahkan di akhir timeline.');
+    }
+    const payload = { ...next, normalizedIncidentId: nextNormalized };
+    if (!isFirestoreIncidentPayloadSafe(payload)) {
+      const sizeKb = Math.ceil(measureFirestoreDocumentBytes(payload) / 1024);
+      throw new FirebaseRepositoryError('incident_payload_too_large', `Data incident ${sizeKb} KiB melebihi batas aman ${Math.round(MAX_FIRESTORE_INCIDENT_DOCUMENT_BYTES / 1024)} KiB. Ringkas progress atau teks yang terlalu panjang sebelum menyimpan.`, current);
     }
     const validationError = validateIncidentPayload(next, current);
     if (validationError) {
