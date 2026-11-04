@@ -440,18 +440,19 @@ function App() {
             .filter((notice): notice is NonNullable<typeof notice> => Boolean(notice))
             .filter((notice) => !seen.has(notice.fingerprint));
 
-        slaNoticeInitialRef.current.add(scope);
         if (!notices.length) {
+            slaNoticeInitialRef.current.add(scope);
             try { if (firstPass) localStorage.setItem(initialKey, '1'); } catch { /* Storage may be disabled. */ }
             return;
         }
 
-        notices.forEach((notice) => seen.add(notice.fingerprint));
-        slaNoticeMemoryRef.current = seen;
-        try {
-            localStorage.setItem(storageKey, JSON.stringify([...seen].slice(-300)));
-            localStorage.setItem(initialKey, '1');
-        } catch { /* The in-memory set still prevents duplicate notices in this session. */ }
+        const browserNotificationAllowed = 'Notification' in window
+            && Notification.permission === 'granted'
+            && document.hidden;
+
+        // Do not mark notices as delivered while hidden if the browser cannot display them.
+        // The visibility-change clock refresh will surface them as in-app toasts on return.
+        if (document.hidden && !browserNotificationAllowed) return;
 
         const counts = notices.reduce((total, notice) => {
             total[notice.stage] = (total[notice.stage] || 0) + 1;
@@ -463,24 +464,34 @@ function App() {
             counts.escalated ? `${counts.escalated} eskalasi L2` : '',
             counts.critical ? `${counts.critical} eskalasi L3` : '',
         ].filter(Boolean).join(' · ');
-        const browserNotificationAllowed = 'Notification' in window
-            && Notification.permission === 'granted'
-            && document.hidden;
 
         if (browserNotificationAllowed) {
             const title = notices.length === 1 ? notices[0].title : `NOC Desk · ${notices.length} SLA notice`;
             const body = notices.length === 1 ? notices[0].body : detail;
-            const browserNotice = new Notification(title, {
-                body,
-                tag: `noc-sla-${workspaceId}`,
-                renotify: false,
-            });
-            browserNotice.onclick = () => window.focus();
+            try {
+                const browserNotice = new Notification(title, {
+                    body,
+                    tag: `noc-sla-${workspaceId}`,
+                    renotify: false,
+                });
+                browserNotice.onclick = () => window.focus();
+            } catch {
+                // Retry as an in-app toast when the user returns to this tab.
+                return;
+            }
         } else if (firstPass || notices.length > 1) {
             sonnerToast.message(`SLA Watch · ${notices.length} incident perlu perhatian`, { description: detail });
         } else {
             sonnerToast.message(notices[0].title, { description: notices[0].body });
         }
+
+        notices.forEach((notice) => seen.add(notice.fingerprint));
+        slaNoticeMemoryRef.current = seen;
+        slaNoticeInitialRef.current.add(scope);
+        try {
+            localStorage.setItem(storageKey, JSON.stringify([...seen].slice(-300)));
+            localStorage.setItem(initialKey, '1');
+        } catch { /* The in-memory set still prevents duplicate notices in this session. */ }
     }, [activeIncidents, data?.profile.workspaceId, data?.profile.userId, data?.settings, clock, notificationReady]);
     const runningItems = useMemo<RunningItem[]>(() => { const activeById = new Map(activeIncidents.map(item => [item.id, item])); const severityRank: Record<string, number> = { Critical: 0, Major: 1, Minor: 2 }; return runningIds.map(id => activeById.get(id)).filter((item): item is Incident => Boolean(item)).map(incident => { const sla = incidentSlaState(incident, data?.settings || defaultSettings, clock); return { incident, overdue: sla.overdue, ageMinutes: sla.ageMinutes, limitMinutes: sla.limitMinutes, lastUpdateAt: sla.lastUpdateAt }; }).sort((a, b) => Number(b.overdue) - Number(a.overdue) || (severityRank[a.incident.severity] ?? 9) - (severityRank[b.incident.severity] ?? 9) || b.ageMinutes - a.ageMinutes); }, [activeIncidents, runningIds, data?.settings, clock]);
     const role = data?.profile.role || 'operator'; const isAdmin = role === 'admin'; const canReview = role !== 'operator';
