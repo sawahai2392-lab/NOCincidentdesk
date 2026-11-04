@@ -80,6 +80,23 @@ export const auth = {
       picture: session.user.image || undefined
     };
   },
+  async signInWithEmail(input: { email: string; password: string }) {
+    await request("POST", "/api/auth/sign-in/email", {
+      email: input.email.trim().toLowerCase(),
+      password: input.password,
+      callbackURL: window.location.origin
+    });
+    return await this.getUser();
+  },
+  async signUpWithEmail(input: { name: string; email: string; password: string }) {
+    await request("POST", "/api/auth/sign-up/email", {
+      name: input.name.trim(),
+      email: input.email.trim().toLowerCase(),
+      password: input.password,
+      callbackURL: window.location.origin
+    });
+    return await this.getUser();
+  },
   async signIn(options?: { scope?: string }) {
     const result = await request<{ url?: string; redirect?: boolean; user?: unknown }>(
       "POST",
