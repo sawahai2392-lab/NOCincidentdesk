@@ -19,7 +19,8 @@
     "test:pagination": "node --test tests/incident-pagination.test.mjs",
     "test:usage": "node --test tests/firestore-usage.test.mjs",
     "test:backup": "node --test tests/workspace-backup.test.mjs",
-    "test:import": "node --test tests/workspace-import.test.mjs"
+    "test:import": "node --test tests/workspace-import.test.mjs",
+    "test:restore-policy": "node --test tests/workspace-restore-policy.test.mjs"
   },
   "dependencies": {
     "@floating-ui/react": "^0.27.16",
