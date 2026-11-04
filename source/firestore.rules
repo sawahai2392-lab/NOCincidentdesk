@@ -33,12 +33,15 @@ service cloud.firestore {
     }
 
     function incidentHasKeyAfter(workspaceId, incidentId) {
+      let businessId = request.resource.data.incidentId;
       let normalized = request.resource.data.normalizedIncidentId;
       return request.resource.data.deletedAt > 0
-        || !(normalized is string)
-        || normalized.size() == 0
+        || !(businessId is string)
+        || businessId.size() == 0
         || (
-          existsAfter(incidentKeyPath(workspaceId, normalized))
+          normalized is string
+          && normalized.size() > 0
+          && existsAfter(incidentKeyPath(workspaceId, normalized))
           && getAfter(incidentKeyPath(workspaceId, normalized)).data.incidentId == incidentId
           && getAfter(incidentKeyPath(workspaceId, normalized)).data.normalizedKey == normalized
           && getAfter(incidentKeyPath(workspaceId, normalized)).data.active == true
