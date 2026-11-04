@@ -34,6 +34,7 @@ import './enterprise-overhaul.css';
 import './cutpoint-polish.css';
 import './responsive-viewport-fix.css';
 import './sidebar-command-center.css';
+import './glass-float-theme.css';
 
 createRoot(document.getElementById('root')!).render(
     <StrictMode>
