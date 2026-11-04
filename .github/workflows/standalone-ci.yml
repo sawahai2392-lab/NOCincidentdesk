@@ -35,7 +35,6 @@ jobs:
           --health-timeout 5s
           --health-retries 12
     env:
-      NODE_ENV: production
       API_HOST: 127.0.0.1
       API_PORT: 4000
       WEB_ORIGIN: http://127.0.0.1:4000
@@ -73,6 +72,8 @@ jobs:
       - name: Smoke test standalone production server
         working-directory: source
         shell: bash
+        env:
+          NODE_ENV: production
         run: |
           node server/dist/index.js > /tmp/noc-server.log 2>&1 &
           SERVER_PID=$!
