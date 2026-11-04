@@ -245,6 +245,7 @@ async function postRequest(path: string, body: Record<string, unknown> = {}): Pr
       user,
       incidentId,
       String(body.label || 'Manual snapshot'),
+      Number(body.revision),
     );
     return ok({ created: true, version });
   }
