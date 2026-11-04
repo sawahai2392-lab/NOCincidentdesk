@@ -95,6 +95,7 @@ beforeEach(async () => {
       status: 'Open',
       severity: 'Major',
       deletedAt: 0,
+      normalizedIncidentId: 'tta001',
       createdBy: 'operator-a',
       createdAt: 1,
       updatedBy: 'operator-a',
@@ -185,6 +186,55 @@ test('supervisor can mark an incident Closed', async () => {
     updatedAt: 2,
     revision: 2,
   }));
+});
+
+test('incident key documents must point to an active incident in the same workspace', async () => {
+  const db = testEnv.authenticatedContext('operator-a', {
+    email: 'operator@example.com',
+  }).firestore();
+
+  await assertSucceeds(setDoc(doc(db, 'workspaces/workspace-a/incidents/new-keyed'), {
+    id: 'new-keyed',
+    incidentId: 'TT-A-002',
+    normalizedIncidentId: 'tta002',
+    status: 'Draft',
+    severity: 'Major',
+    deletedAt: 0,
+    createdBy: 'operator-a',
+    createdAt: 2,
+    updatedBy: 'operator-a',
+    updatedAt: 2,
+    revision: 1,
+  }));
+
+  await assertSucceeds(setDoc(doc(db, 'workspaces/workspace-a/incidentKeys/tta002'), {
+    incidentId: 'new-keyed',
+    normalizedKey: 'tta002',
+    active: true,
+  }));
+
+  await assertFails(setDoc(doc(db, 'workspaces/workspace-a/incidentKeys/poisoned'), {
+    incidentId: 'missing-incident',
+    normalizedKey: 'poisoned',
+    active: true,
+  }));
+});
+
+test('admin can release an incident key when moving an incident to Trash', async () => {
+  const db = testEnv.authenticatedContext('admin-a', {
+    email: 'admin@example.com',
+  }).firestore();
+  const batch = writeBatch(db);
+  batch.update(doc(db, 'workspaces/workspace-a/incidents/incident-a'), {
+    deletedAt: 10,
+    deletedBy: 'admin-a',
+    deleteReason: 'Duplicate report',
+    updatedBy: 'admin-a',
+    updatedAt: 10,
+    revision: 2,
+  });
+  batch.delete(doc(db, 'workspaces/workspace-a/incidentKeys/tta001'));
+  await assertSucceeds(batch.commit());
 });
 
 test('audit entries are append-only for workspace members', async () => {
