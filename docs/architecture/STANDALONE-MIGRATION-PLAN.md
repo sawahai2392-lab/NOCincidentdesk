@@ -1,36 +1,36 @@
 # NOC Incident Desk — Standalone Migration Plan
 
-**Baseline:** \`feat/tt-editor-quick-updates\`  
-**Migration branch:** \`feat/standalone-platform-migration\`  
+**Baseline:** `feat/tt-editor-quick-updates`  
+**Migration branch:** `feat/standalone-platform-migration`  
 **Rule:** keep the existing UI feature PR unmerged until the local build and regression checks pass. No PR is merged automatically.
 
 ## Current dependency map
 
 The current source is not standalone:
-- \`source/src/NocApp.tsx\` imports \`api\`, \`auth\`, \`image\`, \`invitesClient\`, \`notifications\`, and \`ws\` from \`@appdeploy/client\`.
-- \`source/backend/index.ts\` imports \`router\`, \`json\`, \`error\`, \`requireAuth\`, \`db\`, \`storage\`, \`invites\`, \`secrets\`, \`notifications\`, and \`ai\` from \`@appdeploy/sdk\`.
+- `source/src/NocApp.tsx` imports `api`, `auth`, `image`, `invitesClient`, `notifications`, and `ws` from `@appdeploy/client`.
+- `source/backend/index.ts` imports `router`, `json`, `error`, `requireAuth`, `db`, `storage`, `invites`, `secrets`, `notifications`, and `ai` from `@appdeploy/sdk`.
 - The backend exposes the existing incident, bootstrap, settings, member, invite, attachment, import, intelligence, reliability, route-master, and SLA operations.
-- \`source/cron.json\` configures scheduled SLA processing in AppDeploy.
-- \`source/package.json\` currently has Vite 6 and no dependency for \`@appdeploy/client\`; no package lock is committed at this path.
+- `source/cron.json` configures scheduled SLA processing in AppDeploy.
+- `source/package.json` currently has Vite 6 and no dependency for `@appdeploy/client`; no package lock is committed at this path.
 
 ## Replacement map
 
 | Existing AppDeploy capability | Standalone replacement |
 |---|---|
-| \`@appdeploy/client/api\` | Local typed \`fetch\` API client using same-origin cookies |
-| \`@appdeploy/client/auth\` | Better Auth browser client and server session middleware |
-| \`@appdeploy/client/image\` | Browser File/Canvas utilities; server image validation |
-| \`@appdeploy/client/invitesClient\` | Local invite-code URL/session helper |
-| \`@appdeploy/client/notifications\` | Persisted notifications + Web Push/VAPID |
-| \`@appdeploy/client/ws\` | Socket.IO client |
-| \`@appdeploy/sdk/router\` | Hono routers and middleware |
-| \`@appdeploy/sdk/requireAuth\` | Better Auth session + workspace membership middleware |
-| \`@appdeploy/sdk/db\` | PostgreSQL + Drizzle repositories |
-| \`@appdeploy/sdk/storage\` | Local/S3-compatible \`StorageService\` |
-| \`@appdeploy/sdk/invites\` | Workspace invitation table, hashed tokens, expiry, and email delivery |
-| \`@appdeploy/sdk/secrets\` | Validated environment secrets / host secret store |
-| \`@appdeploy/sdk/notifications\` | Web Push and in-app notification services |
-| \`@appdeploy/sdk/ai\` | Direct Gemini provider adapter |
+| `@appdeploy/client/api` | Local typed `fetch` API client using same-origin cookies |
+| `@appdeploy/client/auth` | Better Auth browser client and server session middleware |
+| `@appdeploy/client/image` | Browser File/Canvas utilities; server image validation |
+| `@appdeploy/client/invitesClient` | Local invite-code URL/session helper |
+| `@appdeploy/client/notifications` | Persisted notifications + Web Push/VAPID |
+| `@appdeploy/client/ws` | Socket.IO client |
+| `@appdeploy/sdk/router` | Hono routers and middleware |
+| `@appdeploy/sdk/requireAuth` | Better Auth session + workspace membership middleware |
+| `@appdeploy/sdk/db` | PostgreSQL + Drizzle repositories |
+| `@appdeploy/sdk/storage` | Local/S3-compatible `StorageService` |
+| `@appdeploy/sdk/invites` | Workspace invitation table, hashed tokens, expiry, and email delivery |
+| `@appdeploy/sdk/secrets` | Validated environment secrets / host secret store |
+| `@appdeploy/sdk/notifications` | Web Push and in-app notification services |
+| `@appdeploy/sdk/ai` | Direct Gemini provider adapter |
 | AppDeploy cron | PostgreSQL-backed scheduled jobs |
 
 ## Phases and exit criteria
