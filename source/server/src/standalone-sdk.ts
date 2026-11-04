@@ -2,11 +2,11 @@ import { createHash, createHmac, randomBytes, randomUUID, timingSafeEqual } from
 import { mkdir, readFile, rm, writeFile } from "node:fs/promises";
 import { basename, dirname, extname, isAbsolute, relative, resolve, sep } from "node:path";
 import { GoogleGenAI } from "@google/genai";
+import { Hono } from "hono";
 import { env } from "./env.js";
 import { pool } from "./db/client.js";
 import { sendRealtime } from "./realtime.js";
 
-type LegacyRecord = Record<string, unknown> & { id: string };
 type ListOptions = { limit?: number; nextToken?: string };
 type StoredFile = { path: string; content: string; contentType?: string };
 type AuthenticatedUser = { userId: string; email?: string; name?: string; picture?: string };
@@ -162,20 +162,13 @@ export function requireAuth(): RouteStep {
 }
 
 export function router(routes: Record<string, RouteStep[]>) {
-  // Import Hono lazily through the package's public API.
-  const app = new (class {
-    readonly instance: import("hono").Hono;
-    constructor() {
-      // eslint-disable-next-line @typescript-eslint/no-require-imports
-      this.instance = new HonoRouter();
-    }
-  })();
+  const app = new Hono();
 
   for (const [definition, steps] of Object.entries(routes)) {
     const separator = definition.indexOf(" ");
     const method = definition.slice(0, separator).toUpperCase();
     const path = definition.slice(separator + 1);
-    app.instance.on(method, path, async (context) => {
+    app.on(method, path, async (context) => {
       const url = new URL(context.req.url);
       const body =
         method === "GET" || method === "HEAD"
@@ -196,7 +189,7 @@ export function router(routes: Record<string, RouteStep[]>) {
     });
   }
 
-  return app.instance;
+  return app;
 }
 
 class InviteError extends Error {
