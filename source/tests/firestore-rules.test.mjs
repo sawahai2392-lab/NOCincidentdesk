@@ -659,3 +659,61 @@ test('restore operations are Admin-only and immutable outside the allowed status
   }, { merge: true }));
   await assertFails(deleteDoc(operationRef));
 });
+
+test('workspace integrity runs are Admin-only append-only diagnostic records', async () => {
+  const adminDb = testEnv.authenticatedContext('admin-a', {
+    email: 'admin@example.com',
+    email_verified: true,
+  }).firestore();
+  const operatorDb = testEnv.authenticatedContext('operator-a', {
+    email: 'operator@example.com',
+    email_verified: true,
+  }).firestore();
+  const createdAt = Date.now();
+  const scanRef = doc(adminDb, 'workspaces/workspace-a/integrityRuns/scan-1');
+
+  await assertSucceeds(setDoc(scanRef, {
+    id: 'scan-1',
+    kind: 'scan',
+    status: 'warning',
+    createdAt,
+    createdBy: 'admin-a',
+    createdByName: 'Admin A',
+    counts: { critical: 0, warning: 1, healthy: 5, checks: 6 },
+    coverage: { incidentsScanned: 1, partial: false },
+    findingCount: 1,
+    repairsAvailable: 0,
+    findings: [{ id: 'route-master:not-configured', category: 'route-master', severity: 'warning', title: 'Route Master belum dikonfigurasi' }],
+  }));
+
+  await assertFails(setDoc(scanRef, { status: 'critical' }, { merge: true }));
+  await assertFails(deleteDoc(scanRef));
+  await assertFails(getDoc(doc(operatorDb, 'workspaces/workspace-a/integrityRuns/scan-1')));
+  await assertFails(setDoc(doc(operatorDb, 'workspaces/workspace-a/integrityRuns/operator-scan'), {
+    id: 'operator-scan',
+    kind: 'scan',
+    status: 'healthy',
+    createdAt,
+    createdBy: 'operator-a',
+    createdByName: 'Operator A',
+    counts: { critical: 0, warning: 0, healthy: 1, checks: 1 },
+    coverage: { partial: false },
+    findingCount: 0,
+    repairsAvailable: 0,
+    findings: [],
+  }));
+
+  await assertSucceeds(setDoc(doc(adminDb, 'workspaces/workspace-a/integrityRuns/repair-1'), {
+    id: 'repair-1',
+    kind: 'repair',
+    status: 'completed',
+    createdAt: createdAt + 1,
+    createdBy: 'admin-a',
+    createdByName: 'Admin A',
+    applied: 1,
+    skipped: 0,
+    errorCount: 0,
+    errors: [],
+    operations: [{ id: 'create-incident-key:incident-a', kind: 'create-incident-key', status: 'applied' }],
+  }));
+});
