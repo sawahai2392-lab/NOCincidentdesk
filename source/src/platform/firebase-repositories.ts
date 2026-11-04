@@ -37,27 +37,30 @@ import {
 } from '../domain';
 
 
-async function getDoc(...args: Parameters<typeof firestoreGetDoc>) {
+// Keep Firebase's overloaded generic signatures intact. Using Parameters<> on
+// overloaded SDK functions collapses the overload set to its last signature,
+// which widens snapshots to unknown and breaks the optional transaction options.
+const getDoc = (async (...args: any[]) => {
   const snapshot = await firestoreGetDoc(...args);
   recordDocumentRead();
   return snapshot;
-}
+}) as typeof firestoreGetDoc;
 
-async function getDocs(...args: Parameters<typeof firestoreGetDocs>) {
+const getDocs = (async (...args: any[]) => {
   const snapshot = await firestoreGetDocs(...args);
   recordQueryRead(snapshot.size);
   return snapshot;
-}
+}) as typeof firestoreGetDocs;
 
-async function setDoc(...args: Parameters<typeof firestoreSetDoc>) {
+const setDoc = (async (...args: any[]) => {
   await firestoreSetDoc(...args);
   recordDirectWrite();
-}
+}) as typeof firestoreSetDoc;
 
-async function runTransaction<T>(...args: Parameters<typeof firestoreRunTransaction<T>>) {
+const runTransaction = (async (...args: any[]) => {
   recordTransaction();
-  return firestoreRunTransaction<T>(...args);
-}
+  return firestoreRunTransaction(...args);
+}) as typeof firestoreRunTransaction;
 
 const now = () => Date.now();
 const workspacePath = (workspaceId: string) => 'workspaces/' + workspaceId;
