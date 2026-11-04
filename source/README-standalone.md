@@ -7,7 +7,8 @@ This branch is the standalone platform migration. It is based on the TT Editor /
 - Node.js 26 LTS or newer
 - npm 10.8 or newer
 - Docker Desktop with Docker Compose
-- Google OAuth credentials for browser sign-in (local password login is enabled in Better Auth, but the current UI exposes the Google sign-in action)
+- Docker Desktop with Docker Compose for the local PostgreSQL service
+- Google OAuth is optional. Email/password registration and sign-in are available locally.
 
 ## Start locally on Windows PowerShell
 
@@ -34,9 +35,11 @@ Open:
 
 The `dev` command starts the Hono API and Vite web server together. The Vite dev server proxies `/api` and `/socket.io` to the API.
 
-## Google OAuth
+## Authentication
 
-Create a Google OAuth 2.0 Web application client and add this local authorized redirect URI:
+The login screen supports email/password registration and sign-in. New account passwords must be at least 12 characters. The first account created in a fresh standalone database becomes the initial workspace Admin. Keep registration restricted or add an invitation/approval policy before exposing the service publicly.
+
+Google OAuth is optional. To enable it, create a Google OAuth 2.0 Web application client and add this local authorized redirect URI:
 
 ```text
 http://127.0.0.1:5173/api/auth/callback/google
@@ -44,7 +47,7 @@ http://127.0.0.1:5173/api/auth/callback/google
 
 Set `GOOGLE_CLIENT_ID` and `GOOGLE_CLIENT_SECRET` in `.env`, then restart the API. Never prefix server secrets with `VITE_` and never commit `.env`.
 
-The current login UI uses Google OAuth. Better Auth email/password is enabled server-side for future account UI work, but the existing UI has not yet been extended with email/password form controls.
+Email/password registration and sign-in work without configuring an OAuth provider. Google is an optional additional login method.
 
 ## Optional capabilities
 
