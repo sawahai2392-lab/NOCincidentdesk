@@ -36,6 +36,7 @@ import {
   startRouteMasterImport,
   subscribeToWorkspace,
   updateMemberRole,
+  verifyRouteMasterImport,
   FirebaseRepositoryError,
   normalizeIncidentSnapshot,
 } from './firebase-repositories';
@@ -272,6 +273,17 @@ async function postRequest(path: string, body: Record<string, unknown> = {}): Pr
       user,
     );
     return ok({ saved: true });
+  }
+
+  if (path === '/api/route-master/import/verify') {
+    if (!user) throw new FirebaseApiError('auth_required', 'Silakan masuk terlebih dahulu.', 401);
+    const result = await verifyRouteMasterImport(
+      profile.workspaceId,
+      String(body.batchId || ''),
+      Number(body.expectedCount || 0),
+      String(body.expectedFingerprint || ''),
+    );
+    return ok(result);
   }
 
   if (path === '/api/route-master/import/commit') {
