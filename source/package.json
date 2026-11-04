@@ -12,7 +12,8 @@
     "deploy:firebase": "npm run build && firebase deploy --only hosting,firestore:rules,firestore:indexes",
     "test:rules:unit": "node --test tests/firestore-rules.test.mjs",
     "test:rules": "firebase emulators:exec --project demo-noc-incident-desk --only firestore \"npm run test:rules:unit\"",
-    "typecheck": "tsc --noEmit"
+    "typecheck": "tsc --noEmit",
+    "test:sla": "node --test tests/sla-notifications.test.mjs"
   },
   "dependencies": {
     "@floating-ui/react": "^0.27.16",
