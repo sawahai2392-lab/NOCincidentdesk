@@ -288,6 +288,22 @@ function App() {
             setAuthBusy(false);
         }
     }
+    async function requestPasswordReset() {
+        setAuthError('');
+        if (!authEmail.trim()) {
+            setAuthError('Masukkan email akun terlebih dahulu.');
+            return;
+        }
+        setAuthBusy(true);
+        try {
+            await auth.requestPasswordReset(authEmail);
+            notify('Permintaan pemulihan diproses. Jika email terdaftar, tautan reset akan dikirim ke inbox.', 'success');
+        } catch (err) {
+            setAuthError(errorMessage(err));
+        } finally {
+            setAuthBusy(false);
+        }
+    }
     async function registerWithPassword() {
         setAuthError('');
         if (authPassword.length < 12) {
@@ -396,6 +412,7 @@ function App() {
 <Button block variant='primary' icon={authBusy ? <LoaderCircle className='spin' size={17}/> : <ShieldCheck size={18}/>} disabled={authBusy || !authEmail.trim() || !authPassword} onClick={() => void (authMode === 'register' ? registerWithPassword() : signInWithPassword())}>{authBusy ? 'Memproses…' : authMode === 'register' ? 'Buat akun dan workspace' : 'Masuk dengan email'}</Button>
 <div className='firebase-auth-divider'><span>atau</span></div>
 <Button block variant='ghost' icon={<ShieldCheck size={18}/>} disabled={authBusy} onClick={() => void signIn()}>Lanjutkan dengan Google</Button>
+{authMode === 'signin' && <button type='button' className='firebase-auth-toggle' disabled={authBusy || !authEmail.trim()} onClick={() => void requestPasswordReset()}>Lupa password?</button>}
 <button type='button' className='firebase-auth-toggle' onClick={() => { setAuthMode(mode => mode === 'signin' ? 'register' : 'signin'); setAuthError(''); }}>{authMode === 'register' ? 'Sudah punya akun? Masuk' : 'Belum punya akun? Buat akun'}</button>
 </div><small className='legal'>Dengan melanjutkan, lo menyetujui <a href='/resources/terms-and-conditions.html' target='_blank' rel='noreferrer'>ketentuan</a> dan <a href='/resources/privacy-policy.html' target='_blank' rel='noreferrer'>kebijakan privasi</a>.</small></div></section></div>;
     if (inviteCode) return <div className='join-shell'><div className='join-card'><span className='brand-mark large'><UserPlus /></span><Badge tone={inviteInfo?.error || joinError ? 'danger' : 'cyan'}>{inviteInfo?.status || 'Invitation'}</Badge><h1>Bergabung ke workspace NOC?</h1><p>Akun <strong>{user.email || user.name}</strong> akan ditambahkan ke tim. Data workspace pribadi yang sudah ada tidak akan ditimpa.</p>{inviteInfo?.error && <div className='inline-error'>{inviteInfo.error}</div>}{joinError && <div className='inline-error'>{joinError}</div>}<div className='join-actions'><Button variant='ghost' onClick={() => { invitesClient.clearPendingCode(); setInviteCode(null); setJoinError(''); void loadWorkspace(); }} disabled={joinBusy}>Abaikan</Button><Button variant='primary' icon={joinBusy ? <LoaderCircle className='spin' size={17}/> : <UserPlus size={17}/>} onClick={() => void joinWorkspace()} disabled={Boolean(inviteInfo?.error) || joinBusy}>{joinBusy ? 'Menggabungkan…' : 'Gabung workspace'}</Button></div></div></div>;
