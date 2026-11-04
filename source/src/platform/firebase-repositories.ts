@@ -404,6 +404,7 @@ export async function saveIncident(
   workspaceId: string,
   user: User,
   value: Incident,
+  auditContext: { action?: string; summary?: string; sourceVersionId?: string } = {},
 ): Promise<Incident> {
   const incidentRef = doc(firestore, incidentsPath(workspaceId), value.id);
   const auditRef = doc(collection(firestore, auditPath(workspaceId, value.id)));
@@ -462,11 +463,12 @@ export async function saveIncident(
     const fields = changedFields(current, next);
     transaction.set(incidentRef, { ...next, normalizedIncidentId: nextNormalized });
     transaction.set(auditRef, {
-      action: 'updated',
-      summary: 'Incident diperbarui',
+      action: auditContext.action || 'updated',
+      summary: auditContext.summary || 'Incident diperbarui',
       changedFields: fields,
       fromRevision: current.revision,
       toRevision: next.revision,
+      ...(auditContext.sourceVersionId ? { sourceVersionId: auditContext.sourceVersionId } : {}),
       actorId: user.uid,
       actorName: user.displayName || user.email || 'NOC User',
       createdAt: now(),
@@ -635,16 +637,58 @@ export async function readAudit(workspaceId: string, incidentId: string): Promis
 export async function createVersion(
   workspaceId: string,
   user: User,
-  incident: Incident,
+  incidentId: string,
   label: string,
-): Promise<void> {
-  const versionRef = doc(collection(firestore, versionsPath(workspaceId, incident.id)));
-  await setDoc(versionRef, {
-    label: label.slice(0, 180),
-    incident,
-    createdAt: now(),
-    createdBy: user.uid,
-    createdByName: user.displayName || user.email || 'NOC User',
+  expectedRevision: number,
+): Promise<IncidentVersion> {
+  const incidentRef = doc(firestore, incidentsPath(workspaceId), incidentId);
+  const versionRef = doc(collection(firestore, versionsPath(workspaceId, incidentId)));
+  const auditRef = doc(collection(firestore, auditPath(workspaceId, incidentId)));
+  return runTransaction(firestore, async (transaction) => {
+    const [incidentSnapshot, memberSnapshot] = await Promise.all([
+      transaction.get(incidentRef),
+      transaction.get(doc(firestore, membersPath(workspaceId), user.uid)),
+    ]);
+    if (!incidentSnapshot.exists()) {
+      throw new FirebaseRepositoryError('incident_not_found', 'Incident tidak ditemukan.');
+    }
+    if (!memberSnapshot.exists() || memberSnapshot.data().status !== 'active') {
+      throw new FirebaseRepositoryError('workspace_membership_missing', 'Keanggotaan workspace tidak aktif.');
+    }
+    const incident = normalizeIncidentSnapshot(incidentSnapshot.data(), incidentSnapshot.id);
+    if (incident.deletedAt) {
+      throw new FirebaseRepositoryError('incident_in_trash', 'Incident di Trash tidak dapat dibuatkan snapshot.');
+    }
+    if (incident.revision !== expectedRevision) {
+      throw new FirebaseRepositoryError('revision_conflict', 'Incident berubah sebelum snapshot dibuat.', incident);
+    }
+    const createdAt = now();
+    const auditId = auditRef.id;
+    const version: IncidentVersion = {
+      id: versionRef.id,
+      label: label.slice(0, 180),
+      // Store the exact persisted document shape so Security Rules can verify
+      // the snapshot matches the incident read in this transaction.
+      incident: { ...incidentSnapshot.data(), id: incidentSnapshot.id } as Incident,
+      revision: incident.revision,
+      auditId,
+      createdAt,
+      createdBy: user.uid,
+      createdByName: user.displayName || user.email || 'NOC User',
+    };
+    transaction.set(versionRef, version);
+    transaction.set(auditRef, {
+      action: 'snapshot_created',
+      summary: 'Version snapshot dibuat',
+      changedFields: [],
+      fromRevision: incident.revision,
+      toRevision: incident.revision,
+      versionId: versionRef.id,
+      actorId: user.uid,
+      actorName: user.displayName || user.email || 'NOC User',
+      createdAt,
+    });
+    return version;
   });
 }
 
@@ -661,8 +705,22 @@ export async function restoreVersion(
   if (!currentSnapshot.exists()) throw new FirebaseRepositoryError('incident_not_found', 'Incident tidak ditemukan.');
   const current = normalizeIncidentSnapshot(currentSnapshot.data(), incidentId);
   const versionIncident = normalizeIncidentSnapshot(version.incident as unknown as DocumentData, incidentId);
-  const restored = { ...versionIncident, id: incidentId, revision: current.revision };
-  return saveIncident(workspaceId, user, restored);
+  if (versionIncident.id !== incidentId) {
+    throw new FirebaseRepositoryError('version_incident_mismatch', 'Snapshot tidak cocok dengan incident yang dipilih.');
+  }
+  // Progress is an append-only operational record. Restoring an older
+  // snapshot must not erase timeline entries added after that snapshot.
+  const restored = {
+    ...versionIncident,
+    id: incidentId,
+    revision: current.revision,
+    progress: current.progress,
+  };
+  return saveIncident(workspaceId, user, restored, {
+    action: 'version_restored',
+    summary: 'Incident dipulihkan dari version snapshot',
+    sourceVersionId: versionId,
+  });
 }
 
 export async function saveSettings(

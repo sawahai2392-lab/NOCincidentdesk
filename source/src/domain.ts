@@ -164,12 +164,16 @@ export interface AuditEntry {
   actorId: string;
   actorName: string;
   createdAt: number;
+  versionId?: string;
+  sourceVersionId?: string;
 }
 
 export interface IncidentVersion {
   id: string;
   label: string;
   incident: Incident;
+  revision?: number;
+  auditId?: string;
   createdAt: number;
   createdBy: string;
   createdByName: string;

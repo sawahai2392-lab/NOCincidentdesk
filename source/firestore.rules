@@ -26,6 +26,14 @@ service cloud.firestore {
       return /databases/$(database)/documents/workspaces/$(workspaceId)/incidentKeys/$(normalizedKey);
     }
 
+    function incidentAuditPath(workspaceId, incidentId, auditId) {
+      return /databases/$(database)/documents/workspaces/$(workspaceId)/incidents/$(incidentId)/audit/$(auditId);
+    }
+
+    function incidentVersionPath(workspaceId, incidentId, versionId) {
+      return /databases/$(database)/documents/workspaces/$(workspaceId)/incidents/$(incidentId)/versions/$(versionId);
+    }
+
     function incidentKeyMatchesAfter(workspaceId) {
       let target = incidentPath(workspaceId, request.resource.data.incidentId);
       return request.resource.data.incidentId is string
@@ -268,7 +276,56 @@ service cloud.firestore {
         match /audit/{auditId} {
           allow get, list: if activeMember(workspaceId);
           allow create: if activeMember(workspaceId)
-            && request.resource.data.actorId == request.auth.uid;
+            && request.resource.data.keys().hasOnly([
+              'action', 'summary', 'changedFields', 'fromRevision', 'toRevision',
+              'versionId', 'sourceVersionId', 'actorId', 'actorName', 'createdAt'
+            ])
+            && request.resource.data.action in [
+              'created', 'updated', 'deleted', 'restored',
+              'snapshot_created', 'version_restored'
+            ]
+            && request.resource.data.summary is string
+            && request.resource.data.changedFields is list
+            && request.resource.data.fromRevision is number
+            && request.resource.data.toRevision is number
+            && (
+              (request.resource.data.action == 'created'
+                && request.resource.data.fromRevision == 0
+                && request.resource.data.toRevision == 1)
+              || (request.resource.data.action == 'snapshot_created'
+                && request.resource.data.fromRevision == request.resource.data.toRevision)
+              || (request.resource.data.action in ['updated', 'deleted', 'restored', 'version_restored']
+                && request.resource.data.toRevision == request.resource.data.fromRevision + 1)
+            )
+            && request.resource.data.actorId == request.auth.uid
+            && request.resource.data.actorName is string
+            && request.resource.data.createdAt is number
+            && existsAfter(incidentPath(workspaceId, incidentId))
+            && request.resource.data.toRevision == getAfter(incidentPath(workspaceId, incidentId)).data.revision
+            && (
+              (
+                request.resource.data.action == 'snapshot_created'
+                && 'versionId' in request.resource.data
+                && !('sourceVersionId' in request.resource.data)
+                && existsAfter(incidentVersionPath(workspaceId, incidentId, request.resource.data.versionId))
+                && getAfter(incidentVersionPath(workspaceId, incidentId, request.resource.data.versionId)).data.auditId == auditId
+                && getAfter(incidentVersionPath(workspaceId, incidentId, request.resource.data.versionId)).data.revision == request.resource.data.toRevision
+                && getAfter(incidentVersionPath(workspaceId, incidentId, request.resource.data.versionId)).data.createdAt == request.resource.data.createdAt
+              )
+              || (
+                request.resource.data.action == 'version_restored'
+                && 'sourceVersionId' in request.resource.data
+                && !('versionId' in request.resource.data)
+                && exists(incidentVersionPath(workspaceId, incidentId, request.resource.data.sourceVersionId))
+                && get(incidentVersionPath(workspaceId, incidentId, request.resource.data.sourceVersionId)).data.incident.id == incidentId
+              )
+              || (
+                request.resource.data.action != 'snapshot_created'
+                && request.resource.data.action != 'version_restored'
+                && !('versionId' in request.resource.data)
+                && !('sourceVersionId' in request.resource.data)
+              )
+            );
           allow update: if false;
           // Audit history is immutable in Spark-only mode.
           allow delete: if false;
@@ -277,8 +334,27 @@ service cloud.firestore {
         match /versions/{versionId} {
           allow get, list: if activeMember(workspaceId);
           allow create: if activeMember(workspaceId)
+            && request.resource.data.keys().hasOnly([
+              'id', 'label', 'incident', 'revision', 'auditId',
+              'createdAt', 'createdBy', 'createdByName'
+            ])
+            && request.resource.data.id == versionId
+            && request.resource.data.label is string
+            && request.resource.data.incident.id == incidentId
+            && request.resource.data.revision is number
+            && exists(incidentPath(workspaceId, incidentId))
+            && request.resource.data.incident == get(incidentPath(workspaceId, incidentId)).data
+            && request.resource.data.revision == get(incidentPath(workspaceId, incidentId)).data.revision
+            && request.resource.data.auditId is string
+            && existsAfter(incidentAuditPath(workspaceId, incidentId, request.resource.data.auditId))
+            && getAfter(incidentAuditPath(workspaceId, incidentId, request.resource.data.auditId)).data.versionId == versionId
+            && getAfter(incidentAuditPath(workspaceId, incidentId, request.resource.data.auditId)).data.action == 'snapshot_created'
+            && getAfter(incidentAuditPath(workspaceId, incidentId, request.resource.data.auditId)).data.actorId == request.auth.uid
+            && getAfter(incidentAuditPath(workspaceId, incidentId, request.resource.data.auditId)).data.toRevision == request.resource.data.revision
+            && getAfter(incidentAuditPath(workspaceId, incidentId, request.resource.data.auditId)).data.createdAt == request.resource.data.createdAt
+            && request.resource.data.createdAt is number
             && request.resource.data.createdBy == request.auth.uid
-            && request.resource.data.incident.id == incidentId;
+            && request.resource.data.createdByName is string;
           allow update: if false;
           // Version history is immutable in Spark-only mode.
           allow delete: if false;

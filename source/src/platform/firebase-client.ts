@@ -240,11 +240,14 @@ async function postRequest(path: string, body: Record<string, unknown> = {}): Pr
   if (versionMatch) {
     if (!user) throw new FirebaseApiError('auth_required', 'Silakan masuk terlebih dahulu.', 401);
     const incidentId = decodeURIComponent(versionMatch[1]);
-    const target = await getDoc(doc(firestore, 'workspaces', profile.workspaceId, 'incidents', incidentId));
-    if (!target.exists()) throw new FirebaseApiError('incident_not_found', 'Incident tidak ditemukan.', 404);
-    const incident = normalizeIncidentSnapshot(target.data(), incidentId);
-    await createVersion(profile.workspaceId, user, incident, String(body.label || 'Manual snapshot'));
-    return ok({ created: true });
+    const version = await createVersion(
+      profile.workspaceId,
+      user,
+      incidentId,
+      String(body.label || 'Manual snapshot'),
+      Number(body.revision),
+    );
+    return ok({ created: true, version });
   }
 
   if (path === '/api/route-master/import/start') {
