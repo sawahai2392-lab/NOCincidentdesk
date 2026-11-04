@@ -14,13 +14,16 @@ import {
   writeBatch,
   Timestamp,
   type DocumentData,
+  type Query,
   type QueryDocumentSnapshot,
+  type QuerySnapshot,
   type Unsubscribe,
 } from 'firebase/firestore';
 import type { User } from 'firebase/auth';
 import { firestore } from './firebase';
 import { recordBatchWrite, recordDirectWrite, recordDocumentRead, recordListenerSnapshot, recordListenerStart, recordListenerStop, recordQueryRead, recordTransaction } from '../firestore-usage';
 import { decodeIncidentPageCursor, encodeIncidentPageCursor } from '../incident-pagination';
+import { createWorkspaceBackupBundle, type WorkspaceBackupBundle } from '../workspace-backup';
 import { isFirestoreIncidentPayloadSafe, measureFirestoreDocumentBytes, MAX_FIRESTORE_INCIDENT_DOCUMENT_BYTES } from '../firestore-payload';
 import {
   defaultSettings,
@@ -809,6 +812,73 @@ export async function getRouteMaster(workspaceId: string): Promise<{ items: Arra
     Array.isArray(item.data().items) ? item.data().items : [],
   ) as Array<{ systemKey: string; routeSegment: string }>;
   return { items, meta };
+}
+
+export async function exportWorkspaceBackup(workspaceId: string, user: User): Promise<WorkspaceBackupBundle> {
+  const memberSnapshot = await getDoc(doc(firestore, membersPath(workspaceId), user.uid));
+  if (!memberSnapshot.exists() || memberSnapshot.data().status !== 'active' || memberSnapshot.data().role !== 'admin') {
+    throw new FirebaseRepositoryError('admin_required', 'Export workspace hanya tersedia untuk Admin aktif.');
+  }
+
+  async function readAll(path: string): Promise<Array<Record<string, unknown> & { id: string }>> {
+    const rows: Array<Record<string, unknown> & { id: string }> = [];
+    let cursor: QueryDocumentSnapshot<DocumentData> | null = null;
+    while (true) {
+      const reference = collection(firestore, path);
+      const pageQuery: Query<DocumentData> = cursor
+        ? query(reference, orderBy(documentId()), startAfter(cursor), limit(400))
+        : query(reference, orderBy(documentId()), limit(400));
+      const snapshot: QuerySnapshot<DocumentData> = await getDocs(pageQuery);
+      rows.push(...snapshot.docs.map((item: QueryDocumentSnapshot<DocumentData>) => ({ ...item.data(), id: item.id })));
+      if (snapshot.size < 400) break;
+      cursor = snapshot.docs[snapshot.docs.length - 1];
+    }
+    return rows;
+  }
+
+  const [members, incidents, settingsSnapshot, routeMasterMetaSnapshot] = await Promise.all([
+    readAll(membersPath(workspaceId)),
+    readAll(incidentsPath(workspaceId)),
+    getDoc(doc(firestore, settingsPath(workspaceId))),
+    getDoc(doc(firestore, workspacePath(workspaceId) + '/routeMasterMeta/main')),
+  ]);
+
+  const history: Array<{ incidentId: string; audit: unknown[]; versions: unknown[] }> = [];
+  for (const incident of incidents) {
+    const incidentId = incident.id;
+    const [audit, versions] = await Promise.all([
+      readAll(auditPath(workspaceId, incidentId)),
+      readAll(versionsPath(workspaceId, incidentId)),
+    ]);
+    history.push({ incidentId, audit, versions });
+  }
+
+  let routeMaster: Array<{ systemKey: string; routeSegment: string }> = [];
+  if (routeMasterMetaSnapshot.exists()) {
+    const batchId = String(routeMasterMetaSnapshot.data().currentBatchId || '');
+    if (batchId) {
+      const chunks = await getDocs(query(
+        collection(firestore, workspacePath(workspaceId) + '/routeMasterBatches/' + batchId + '/chunks'),
+        orderBy('chunkIndex', 'asc'),
+        limit(60),
+      ));
+      routeMaster = chunks.docs.flatMap((chunk) =>
+        Array.isArray(chunk.data().items) ? chunk.data().items : [],
+      ) as Array<{ systemKey: string; routeSegment: string }>;
+    }
+  }
+
+  const settings = settingsSnapshot.exists()
+    ? { ...defaultSettings, ...settingsSnapshot.data(), id: settingsSnapshot.id }
+    : { ...defaultSettings };
+
+  return createWorkspaceBackupBundle(workspaceId, {
+    settings,
+    members,
+    incidents,
+    routeMaster,
+    history,
+  });
 }
 
 export async function startRouteMasterImport(workspaceId: string, user: User): Promise<string> {
