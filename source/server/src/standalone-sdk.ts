@@ -47,7 +47,7 @@ export function error(code: string, status = 400) {
  * into PostgreSQL JSONB while the product's domain tables are migrated.
  */
 export const db = {
-  async list<T extends Record<string, unknown>>(namespace: string, options: ListOptions = {}) {
+  async list<T extends object>(namespace: string, options: ListOptions = {}) {
     const limit = Math.max(1, Math.min(2000, Math.floor(options.limit || 100)));
     const offset = parseOffset(options.nextToken);
     const result = await pool.query<{ document_id: string; payload: T }>(
@@ -69,7 +69,7 @@ export const db = {
     };
   },
 
-  async get<T extends Record<string, unknown>>(namespace: string, ids: string[]) {
+  async get<T extends object>(namespace: string, ids: string[]) {
     if (!ids.length) return [] as Array<(T & { id: string }) | undefined>;
     const result = await pool.query<{ document_id: string; payload: T }>(
       `select document_id, payload
@@ -136,6 +136,18 @@ export const db = {
     );
     const removed = new Set(result.rows.map((row) => row.document_id));
     return ids.map((id) => removed.has(id));
+  }
+};
+
+
+export const workspaceRecords = {
+  async ensure(workspaceId: string, ownerUserId: string, name: string) {
+    await pool.query(
+      `insert into workspaces (id, name, owner_user_id)
+       values ($1, $2, $3)
+       on conflict (id) do nothing`,
+      [workspaceId, name.slice(0, 200) || "NOC Workspace", ownerUserId]
+    );
   }
 };
 
