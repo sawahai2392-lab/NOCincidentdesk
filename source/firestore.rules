@@ -74,6 +74,36 @@ service cloud.firestore {
         && (request.resource.data.status == 'Resolved' || request.resource.data.status == 'Closed');
     }
 
+    function validStatusTransition() {
+      let current = resource.data.status;
+      let next = request.resource.data.status;
+      return current == next
+        || (current == 'Draft' && next in ['Open', 'Cancel'])
+        || (current == 'Open' && next in ['Monitoring', 'Resolved', 'Cancel'])
+        || (current == 'Monitoring' && next in ['Open', 'Resolved', 'Cancel'])
+        || (current == 'Resolved' && next in ['Closed', 'Open'])
+        || (current == 'Closed' && next == 'Open')
+        || (current == 'Cancel' && next == 'Open');
+    }
+
+    function statusTransitionAllowedForRole(workspaceId) {
+      let current = resource.data.status;
+      let next = request.resource.data.status;
+      let unchanged = current == next;
+      let operatorAllowed = (current == 'Draft' && next == 'Open')
+        || (current == 'Open' && next == 'Monitoring')
+        || (current == 'Monitoring' && next == 'Open');
+      return unchanged || canReview(workspaceId) || operatorAllowed;
+    }
+
+    function reopenReasonPresent() {
+      let current = resource.data.status;
+      let next = request.resource.data.status;
+      return !((current in ['Resolved', 'Closed', 'Cancel']) && next == 'Open')
+        || (request.resource.data.reopenReason is string
+          && request.resource.data.reopenReason.size() > 0);
+    }
+
     match /users/{uid} {
       allow get: if signedIn() && request.auth.uid == uid;
       allow list: if false;
@@ -169,9 +199,12 @@ service cloud.firestore {
           && request.resource.data.createdAt == resource.data.createdAt
           && request.resource.data.updatedBy == request.auth.uid
           && request.resource.data.revision == resource.data.revision + 1
+          && request.resource.data.id == incidentId
           && request.resource.data.keys().hasOnly(allowedIncidentFields())
           && (!protectedIncidentChange() || isAdmin(workspaceId))
-          && (!statusChangeNeedsReview() || canReview(workspaceId));
+          && validStatusTransition()
+          && statusTransitionAllowedForRole(workspaceId)
+          && reopenReasonPresent();
 
         allow delete: if isAdmin(workspaceId) && resource.data.deletedAt > 0;
 
