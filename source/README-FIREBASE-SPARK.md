@@ -136,7 +136,8 @@ Features that still require more work or are deliberately unavailable in Spark-o
 - Shared file attachments (Firebase Storage requires Blaze)
 - Server-side Gemini extraction and Copilot
 - SMTP email and server-originated push delivery
-- Background SLA schedules and scheduled notifications
+- Client-side SLA notices while the app is active (due-soon, overdue, L2/L3; browser permission is optional)
+- Background SLA schedules and scheduled notifications (not supported in Spark-only mode; client-side SLA notices work only while the app remains active)
 - Full Operations alert engine, Risk Radar, and Reliability Analytics parity
 - Full-text search beyond bounded Firestore queries
 - Complete AppDeploy export/import and rollback rehearsal
