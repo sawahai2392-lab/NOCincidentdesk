@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useState, type ReactNode } from 'react';
-import { api } from '@appdeploy/client';
+import { api } from './platform/firebase-client';
 import { Activity, AlertTriangle, Check, ClipboardCopy, Gauge, LoaderCircle, Radar, RefreshCw, ScanSearch, ShieldAlert, TrendingUp, Waves } from 'lucide-react';
 import type { Incident } from './domain';
 type RiskRow={name:string;type:string;score:number;band:string;confidence:string;incidentCount90:number;last30:number;last7:number;critical30:number;major30:number;active:number;acceleration:number;medianGapDays:number;daysSinceLast:number;medianMttr:number;latestAt:number;cadenceTargetAt:number;reasons:string[]};
