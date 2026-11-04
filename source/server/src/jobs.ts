@@ -1,4 +1,4 @@
-import PgBoss from "pg-boss";
+import { PgBoss } from "pg-boss";
 import { env } from "./env.js";
 import { slaReminderHandler } from "../../backend/index.js";
 
