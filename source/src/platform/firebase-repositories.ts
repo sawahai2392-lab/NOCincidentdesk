@@ -781,10 +781,18 @@ export async function restoreVersion(
   });
 }
 
+export async function getWorkspaceSettings(workspaceId: string): Promise<SettingsData> {
+  const snapshot = await getDoc(doc(firestore, settingsPath(workspaceId)));
+  return snapshot.exists()
+    ? ({ ...defaultSettings, ...snapshot.data(), id: snapshot.id } as SettingsData)
+    : { ...defaultSettings };
+}
+
 export async function saveSettings(
   workspaceId: string,
   user: User,
   value: SettingsData,
+  expectedUpdatedAt?: number,
 ): Promise<SettingsData> {
   const next = {
     ...defaultSettings,
@@ -792,7 +800,22 @@ export async function saveSettings(
     updatedAt: now(),
     updatedBy: user.uid,
   };
-  await setDoc(doc(firestore, settingsPath(workspaceId)), next);
+  const reference = doc(firestore, settingsPath(workspaceId));
+  if (typeof expectedUpdatedAt === 'number') {
+    await runTransaction(firestore, async (transaction) => {
+      const current = await transaction.get(reference);
+      const actualUpdatedAt = current.exists() ? Number(current.data().updatedAt) || 0 : 0;
+      if (actualUpdatedAt !== expectedUpdatedAt) {
+        throw new FirebaseRepositoryError(
+          'settings_conflict',
+          'Workspace Settings berubah sejak snapshot dibaca. Muat ulang data sebelum mencoba restore.',
+        );
+      }
+      transaction.set(reference, next);
+    });
+  } else {
+    await setDoc(reference, next);
+  }
   return next;
 }
 
@@ -977,25 +1000,45 @@ export async function commitRouteMasterImport(
     throw new FirebaseRepositoryError('route_master_staging_invalid', validation.errors.join(' '));
   }
 
-  const { totalCount: _totalCount, ...publicMetadata } = metadata;
-  const batch = writeBatch(firestore);
-  batch.update(batchRef, {
-    status: 'committed',
-    committedAt: now(),
-    count: validation.count,
+  const expectedCurrentBatchId = Object.prototype.hasOwnProperty.call(metadata, 'expectedCurrentBatchId')
+    ? (typeof metadata.expectedCurrentBatchId === 'string' && metadata.expectedCurrentBatchId ? metadata.expectedCurrentBatchId : null)
+    : undefined;
+  const { totalCount: _totalCount, expectedCurrentBatchId: _expectedCurrentBatchId, ...publicMetadata } = metadata;
+  const metaRef = doc(firestore, workspacePath(workspaceId) + '/routeMasterMeta/main');
+  await runTransaction(firestore, async (transaction) => {
+    const [latestBatch, latestMeta] = await Promise.all([
+      transaction.get(batchRef),
+      transaction.get(metaRef),
+    ]);
+    if (!latestBatch.exists() || latestBatch.data().status !== 'staging') {
+      throw new FirebaseRepositoryError('route_master_staging_not_found', 'Batch staging Route Master sudah tidak tersedia.');
+    }
+    const activeBatchId = latestMeta.exists() && typeof latestMeta.data().currentBatchId === 'string'
+      ? latestMeta.data().currentBatchId
+      : null;
+    if (expectedCurrentBatchId !== undefined && activeBatchId !== expectedCurrentBatchId) {
+      throw new FirebaseRepositoryError(
+        'route_master_conflict',
+        'Route Master aktif berubah selama restore berlangsung. Batch lama tetap aktif; muat ulang sebelum mencoba lagi.',
+      );
+    }
+    // Batch status and active pointer are switched atomically with an optimistic
+    // concurrency check. The previous committed batch is intentionally retained.
+    transaction.update(batchRef, {
+      status: 'committed',
+      committedAt: now(),
+      count: validation.count,
+    });
+    transaction.set(metaRef, {
+      ...publicMetadata,
+      count: validation.count,
+      currentBatchId: batchId,
+      updatedAt: now(),
+      updatedBy: user.uid,
+      updatedByName: user.displayName || user.email || '',
+    });
   });
-  // Pointer activation and batch status are atomic. The previous committed batch
-  // is deliberately retained so an Admin can recover by switching the pointer.
-  batch.set(doc(firestore, workspacePath(workspaceId) + '/routeMasterMeta/main'), {
-    ...publicMetadata,
-    count: validation.count,
-    currentBatchId: batchId,
-    updatedAt: now(),
-    updatedBy: user.uid,
-    updatedByName: user.displayName || user.email || '',
-  });
-  recordBatchWrite(2);
-  await batch.commit();
+  recordTransaction();
 }
 
 export async function createInvite(
