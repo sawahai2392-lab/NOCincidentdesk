@@ -342,11 +342,8 @@ export const validateIncident = (incident: Incident, incidents: Incident[] = [])
   if (b2b) {
     if (!clean(incident.b2bTitle || '')) errors.push('B2B Incident Title wajib diisi.');
   } else {
-    if (!clean(incident.group)) errors.push('Group wajib diisi.');
-    if (!clean(incident.linkA) || !clean(incident.linkB)) errors.push('Kedua link utama wajib diisi.');
-    if (!clean(incident.incidentId)) errors.push('Incident ID wajib diisi.');
+    if (!clean(incident.titleOverride) && !clean(incident.incidentId)) errors.push('Judul TT wajib diisi.');
   }
-  if (!incident.occurTime) errors.push('Occur time wajib diisi.');
   if (incident.dispatchTime && incident.occurTime && incident.dispatchTime < incident.occurTime) errors.push('Dispatch time tidak boleh lebih awal dari occur time.');
   if (incidents.some(item => item.id !== incident.id && item.incidentId.trim() && item.incidentId.trim().toLowerCase() === incident.incidentId.trim().toLowerCase())) errors.push('Incident ID ini sudah digunakan pada report lain.');
   if (incident.status === 'Resolved' || incident.status === 'Closed') {

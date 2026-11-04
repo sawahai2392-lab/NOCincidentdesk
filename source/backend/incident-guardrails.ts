@@ -59,11 +59,9 @@ export const validateIncidentServer = (incident: AnyIncident, current?: AnyIncid
     if (b2b) {
       if (!clean(incident.b2bTitle)) return 'b2b_title_required';
     } else {
-      if (!clean(incident.group)) return 'group_required';
-      if (!clean(incident.linkA) || !clean(incident.linkB)) return 'links_required';
-      if (!clean(incident.incidentId)) return 'incident_id_required';
+      const hasLegacyIdentity = Boolean(current && (clean(current.incidentId) || (clean(current.group) && clean(current.linkA) && clean(current.linkB))));
+      if (!clean(incident.titleOverride) && !hasLegacyIdentity) return 'title_required';
     }
-    if (!clean(incident.occurTime)) return 'occur_time_required';
   }
   const occurAt = timeValue(incident.occurTime);
   const dispatchAt = timeValue(incident.dispatchTime);
