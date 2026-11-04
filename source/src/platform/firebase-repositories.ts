@@ -11,7 +11,6 @@ import {
   runTransaction as firestoreRunTransaction,
   setDoc as firestoreSetDoc,
   startAfter,
-  writeBatch,
   Timestamp,
   type DocumentData,
   type Query,
@@ -1001,22 +1000,24 @@ export async function commitRouteMasterImport(
     ...publicMetadata
   } = metadata;
 
+  const stagedChunkRefs = await getDocs(chunksQuery);
   await runTransaction(firestore, async (transaction) => {
-    // Read the batch, active pointer, and every staged chunk in one consistent
-    // transaction snapshot so a chunk cannot be replaced between validation and activation.
-    const [latestBatch, latestMeta, chunksSnapshot] = await Promise.all([
+    // The web SDK transaction API reads document references, not queries.
+    // Resolve the staged chunk references first, then re-read each chunk inside
+    // the transaction so changed or deleted chunk contents cannot slip through.
+    const [latestBatch, latestMeta] = await Promise.all([
       transaction.get(batchRef),
       transaction.get(metaRef),
-      transaction.get(chunksQuery),
     ]);
+    const latestChunks = await Promise.all(stagedChunkRefs.docs.map((item) => transaction.get(item.ref)));
     if (!latestBatch.exists() || latestBatch.data().status !== 'staging') {
       throw new FirebaseRepositoryError('route_master_staging_not_found', 'Batch staging Route Master sudah tidak tersedia.');
     }
 
     const validation = validateRouteMasterChunkSet(
-      chunksSnapshot.docs.map((item) => ({
-        chunkIndex: Number(item.data().chunkIndex),
-        items: item.data().items,
+      latestChunks.map((item) => ({
+        chunkIndex: item.exists() ? Number(item.data().chunkIndex) : Number.NaN,
+        items: item.exists() ? item.data().items : null,
       })),
       expectedCount,
       expectedFingerprint,
