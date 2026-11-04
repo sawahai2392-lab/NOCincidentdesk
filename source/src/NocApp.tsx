@@ -35,6 +35,12 @@ import { mergeIncidentPage } from './incident-pagination';
 import { analyzeWorkspaceImport } from './workspace-import';
 import { planSelectiveWorkspaceRestore } from './workspace-restore-plan';
 import { executeSelectiveWorkspaceRestore } from './workspace-restore-execution';
+import {
+    canCleanupStaleRouteMasterBatch,
+    canReactivateRouteMasterBatch,
+    getRestoreOperationDisplayStatus,
+    restoreOperationStatusLabel,
+} from './workspace-restore-recovery';
 type View = 'dashboard' | 'editor' | 'archive' | 'trash' | 'tracker' | 'handover' | 'operations' | 'reliability' | 'risk' | 'settings' | 'team';
 type User = {
     userId: string;
@@ -180,6 +186,9 @@ function App() {
     const [workspaceRestoreBusy, setWorkspaceRestoreBusy] = useState(false);
     const [workspaceRestoreProgress, setWorkspaceRestoreProgress] = useState({ stage: '', completed: 0, total: 0, message: '' });
     const [workspaceRestoreResult, setWorkspaceRestoreResult] = useState<any>(null);
+    const [workspaceRestoreRecovery, setWorkspaceRestoreRecovery] = useState<any>(null);
+    const [workspaceRestoreRecoveryBusy, setWorkspaceRestoreRecoveryBusy] = useState(false);
+    const [workspaceRestoreRecoveryAction, setWorkspaceRestoreRecoveryAction] = useState('');
     const [masterImportProgress, setMasterImportProgress] = useState(0);
     const [versions, setVersions] = useState<IncidentVersion[]>([]);
     const [historyOpen, setHistoryOpen] = useState(false);
@@ -218,6 +227,18 @@ function App() {
     async function loadRouteMaster() { const response = await api.get('/api/route-master'); setRouteMaster((response.data.items || []) as RouteMasterPair[]); setRouteMasterMeta((response.data.meta || null) as RouteMasterMeta | null); }
     async function loadGeminiStatus() { try { const response = await api.get('/api/integrations/gemini/status'); setGeminiStatus(response.data as GeminiStatus); } catch { setGeminiStatus({ configured: false, provider: 'Google Gemini', model: 'gemini-3.6-flash' }); } }
     async function loadOpsUnread() { try { const response = await api.get('/api/operations/alerts/summary'); setOpsUnread(Number(response.data.unreadCount) || 0); } catch { setOpsUnread(0); } }
+    async function loadWorkspaceRestoreRecovery() {
+        if (!data || !isAdmin) return;
+        setWorkspaceRestoreRecoveryBusy(true);
+        try {
+            const response = await api.get('/api/workspace-restore/recovery');
+            setWorkspaceRestoreRecovery(response.data || null);
+        } catch (err) {
+            notify(errorMessage(err), 'error');
+        } finally {
+            setWorkspaceRestoreRecoveryBusy(false);
+        }
+    }
     async function loadWorkspace() {
         setLoading(true);
         try {
@@ -242,6 +263,9 @@ function App() {
     useEffect(() => { document.documentElement.dataset.density = density; localStorage.setItem('noc-density', density); }, [density]);
     useEffect(() => { localStorage.setItem('noc-sidebar-collapsed', String(sidebarCollapsed)); }, [sidebarCollapsed]);
     useEffect(() => { if (view !== 'editor') { setFocusMode(false); setQuickUpdateOpen(false); } if (['dashboard', 'operations', 'reliability', 'risk', 'archive', 'tracker', 'handover', 'team'].includes(view)) localStorage.setItem('noc-last-view', view); }, [view]);
+    useEffect(() => {
+        if (view === 'settings' && data?.profile.role === 'admin') void loadWorkspaceRestoreRecovery();
+    }, [view, data?.profile.role, data?.profile.workspaceId]);
     useEffect(() => {
         const workspaceId = data?.profile.workspaceId; const userId = data?.profile.userId; if (!workspaceId || !userId) return;
         const key = `noc-running:${workspaceId}:${userId}`;
@@ -596,11 +620,24 @@ function App() {
         setWorkspaceRestoreBusy(true);
         setWorkspaceRestoreResult(null);
         setWorkspaceRestoreProgress({ stage: 'validating', completed: 0, total: 1, message: 'Memvalidasi pilihan restore.' });
+        let operationId = '';
         try {
             const currentSettingsResponse = workspaceRestoreSelection.settings
                 ? await api.get('/api/settings')
                 : null;
             const currentSettings = currentSettingsResponse?.data?.settings || data.settings;
+            const operation = await api.post('/api/workspace-restore/operations', {
+                kind: 'selective-restore',
+                sourceFileName: workspaceImportFileName,
+                selectedSections: [
+                    ...(workspaceRestoreSelection.settings ? ['settings'] : []),
+                    ...(workspaceRestoreSelection.routeMaster ? ['routeMaster'] : []),
+                ],
+                message: 'Selective workspace restore dimulai.',
+            });
+            operationId = String(operation.data.id || '');
+            if (!operationId) throw new Error('Audit record restore tidak berhasil dibuat. Tidak ada data yang diubah.');
+
             const result = await executeSelectiveWorkspaceRestore({
                 bundle: workspaceImportBundle,
                 preflight: workspaceImportReport,
@@ -642,7 +679,26 @@ function App() {
                 },
                 onProgress: (progress) => setWorkspaceRestoreProgress(progress),
             });
-            setWorkspaceRestoreResult(result);
+            setWorkspaceRestoreResult({ ...result, operationId });
+            try {
+                await api.put(`/api/workspace-restore/operations/${encodeURIComponent(operationId)}`, {
+                    status: result.status,
+                    stage: result.status,
+                    message: result.status === 'completed'
+                        ? 'Selective restore selesai dan diverifikasi.'
+                        : result.status === 'needs-review'
+                            ? 'Status commit belum dapat dipastikan dan memerlukan pemeriksaan Admin.'
+                            : result.status === 'partial'
+                                ? 'Restore berakhir dengan keadaan parsial.'
+                                : 'Selective restore gagal.',
+                    errors: result.errors,
+                    warnings: result.warnings,
+                    stagedBatchId: result.stagedBatchId,
+                    settingsRolledBack: result.settingsRolledBack,
+                });
+            } catch {
+                notify('Restore selesai diproses, tetapi audit record gagal diperbarui. Periksa riwayat recovery.', 'error');
+            }
             if (result.status === 'completed') {
                 notify('Selective restore selesai. Data yang dipilih sudah diverifikasi.', 'success');
                 setWorkspaceRestoreConfirmOpen(false);
@@ -655,12 +711,110 @@ function App() {
                     ? 'Restore gagal. Workspace Settings sebelumnya berhasil dikembalikan.'
                     : 'Restore gagal. Batch aktif tidak diganti.', 'error');
             }
-            // Refresh visible state after success, compensation, or an ambiguous commit.
             try { await loadWorkspace(); } catch { /* Keep the execution report visible when refresh is unavailable. */ }
+            try { await loadWorkspaceRestoreRecovery(); } catch { /* Keep the execution report visible. */ }
         } catch (err) {
+            if (operationId) {
+                try {
+                    await api.put(`/api/workspace-restore/operations/${encodeURIComponent(operationId)}`, {
+                        status: 'failed',
+                        stage: 'failed',
+                        message: 'Restore tidak dapat diselesaikan.',
+                        errors: [errorMessage(err)],
+                    });
+                } catch { /* A still-running audit row will be marked as needs-review by the recovery view after one hour. */ }
+            }
             notify(errorMessage(err), 'error');
         } finally {
             setWorkspaceRestoreBusy(false);
+        }
+    }
+
+    async function reactivatePreviousRouteMaster(batch: any) {
+        if (!data || !isAdmin || !workspaceRestoreRecovery || workspaceRestoreRecoveryBusy || workspaceRestoreRecoveryAction) return;
+        if (!canReactivateRouteMasterBatch(batch, workspaceRestoreRecovery.recovery?.activeBatchId || null)) return;
+        const label = batch.sourceFileName || batch.id;
+        if (!window.confirm(`Aktifkan kembali Route Master "${label}"? Batch aktif saat ini tetap disimpan untuk recovery berikutnya.`)) return;
+        setWorkspaceRestoreRecoveryAction(batch.id);
+        let operationId = '';
+        try {
+            const operation = await api.post('/api/workspace-restore/operations', {
+                kind: 'reactivate-route-master',
+                targetBatchId: batch.id,
+                message: 'Reaktivasi batch Route Master dimulai.',
+            });
+            operationId = String(operation.data.id || '');
+            if (!operationId) throw new Error('Audit record recovery gagal dibuat.');
+            const response = await api.post('/api/route-master/recovery/reactivate', {
+                batchId: batch.id,
+                expectedCurrentBatchId: workspaceRestoreRecovery.recovery.activeBatchId || null,
+            });
+            await api.put(`/api/workspace-restore/operations/${encodeURIComponent(operationId)}`, {
+                status: 'completed',
+                stage: 'completed',
+                message: 'Batch Route Master lama berhasil diaktifkan kembali.',
+                activeBatchId: response.data.activeBatchId,
+            });
+            await loadRouteMaster();
+            await loadWorkspaceRestoreRecovery();
+            notify('Route Master berhasil dikembalikan ke batch sebelumnya.', 'success');
+        } catch (err) {
+            if (operationId) {
+                try {
+                    await api.put(`/api/workspace-restore/operations/${encodeURIComponent(operationId)}`, {
+                        status: 'failed',
+                        stage: 'failed',
+                        message: 'Reaktivasi Route Master gagal.',
+                        errors: [errorMessage(err)],
+                    });
+                } catch { /* Keep the original action error visible. */ }
+            }
+            notify(errorMessage(err), 'error');
+        } finally {
+            setWorkspaceRestoreRecoveryAction('');
+        }
+    }
+
+    async function cleanupStaleRouteMaster(batch: any) {
+        if (!data || !isAdmin || !workspaceRestoreRecovery || workspaceRestoreRecoveryAction) return;
+        if (!batch.stale || batch.status !== 'staging') return;
+        if (!window.confirm(`Hapus batch staging yang tidak aktif selama lebih dari 24 jam? ${batch.id}. Hanya batch staging ini dan chunk-nya yang akan dihapus.`)) return;
+        setWorkspaceRestoreRecoveryAction(batch.id);
+        let operationId = '';
+        try {
+            const operation = await api.post('/api/workspace-restore/operations', {
+                kind: 'cleanup-stale-route-master',
+                targetBatchId: batch.id,
+                message: 'Cleanup stale Route Master staging dimulai.',
+            });
+            operationId = String(operation.data.id || '');
+            if (!operationId) throw new Error('Audit record cleanup gagal dibuat.');
+            const response = await api.post('/api/route-master/recovery/cleanup-stale', {
+                batchId: batch.id,
+                expectedLastActivityAt: batch.lastActivityAt,
+            });
+            await api.put(`/api/workspace-restore/operations/${encodeURIComponent(operationId)}`, {
+                status: 'completed',
+                stage: 'completed',
+                message: 'Batch staging terbengkalai berhasil dibersihkan.',
+                deletedChunks: Number(response.data.deletedChunks) || 0,
+            });
+            await loadWorkspaceRestoreRecovery();
+            notify(`Staging batch dibersihkan. ${Number(response.data.deletedChunks) || 0} chunk dihapus.`, 'success');
+        } catch (err) {
+            if (operationId) {
+                try {
+                    await api.put(`/api/workspace-restore/operations/${encodeURIComponent(operationId)}`, {
+                        status: 'failed',
+                        stage: 'failed',
+                        message: 'Cleanup staging Route Master gagal.',
+                        errors: [errorMessage(err)],
+                    });
+                } catch { /* Keep the original action error visible. */ }
+            }
+            notify(errorMessage(err), 'error');
+        } finally {
+            setWorkspaceRestoreRecoveryAction('');
         }
     }
     async function saveSettings() { try { const response = await api.put('/api/settings', { ...settingsDraft, _expectedUpdatedAt: Number(data?.settings?.updatedAt) || 0 }); const saved = response.data.settings as SettingsData; setData(current => current ? { ...current, settings: saved } : current); setSettingsDraft(clone(saved)); notify('Master data diperbarui.', 'success'); } catch (err) { notify(errorMessage(err), 'error'); } }
@@ -897,7 +1051,53 @@ function App() {
 {workspaceRestoreResult.warnings?.map((item, index) => <small key={'restore-warning-'+index}>• {item}</small>)}
 {workspaceRestoreResult.stagedBatchId && <small>Staging batch: {workspaceRestoreResult.stagedBatchId}</small>}
 </div>}
-</div><div className='settings-note'><ShieldCheck size={20}/><div><strong>Admin only</strong><p>Perubahan template dan master database langsung tersedia untuk seluruh anggota melalui realtime sync.</p></div></div><div className='settings-grid'><ListEditor label='Groups / Regions' value={settingsDraft.groups} onChange={groups => setSettingsDraft(current => ({ ...current, groups }))} hint='Satu item per baris'/><ListEditor label='PIC Areas' value={settingsDraft.picAreas} onChange={picAreas => setSettingsDraft(current => ({ ...current, picAreas }))} hint='Area tanggung jawab'/><ListEditor label='PIC Names' value={settingsDraft.picNames} onChange={picNames => setSettingsDraft(current => ({ ...current, picNames }))} hint='Nama yang sering digunakan'/><ListEditor label='Root Causes' value={settingsDraft.rootCauses} onChange={rootCauses => setSettingsDraft(current => ({ ...current, rootCauses }))} hint='Tetap bisa input manual'/><ListEditor label='Actions' value={settingsDraft.actions} onChange={actions => setSettingsDraft(current => ({ ...current, actions }))} hint='Tindakan penanganan'/><ListEditor label='Quick Progress Phrases' value={settingsDraft.progressPhrases} onChange={progressPhrases => setSettingsDraft(current => ({ ...current, progressPhrases }))} hint='Maksimal 10 tampil sebagai chip'/><ListEditor label='Sites / Link Names' value={settingsDraft.sites} onChange={sites => setSettingsDraft(current => ({ ...current, sites }))} hint='Autocomplete site'/><Field label='SLA Critical (menit)'><input type='number' min={5} max={1440} value={settingsDraft.slaCriticalMinutes} onChange={event => setSettingsDraft(current => ({ ...current, slaCriticalMinutes: Number(event.target.value) }))}/></Field><Field label='SLA Major (menit)'><input type='number' min={5} max={1440} value={settingsDraft.slaMajorMinutes} onChange={event => setSettingsDraft(current => ({ ...current, slaMajorMinutes: Number(event.target.value) }))}/></Field><Field label='SLA Minor (menit)'><input type='number' min={5} max={1440} value={settingsDraft.slaMinorMinutes} onChange={event => setSettingsDraft(current => ({ ...current, slaMinorMinutes: Number(event.target.value) }))}/></Field><Field label='Batas update basi (menit)'><input type='number' min={5} max={1440} value={settingsDraft.staleUpdateMinutes} onChange={event => setSettingsDraft(current => ({ ...current, staleUpdateMinutes: Number(event.target.value) }))}/></Field></div></section></div>;
+</div>{isAdmin && <section className='panel settings-panel restore-recovery-panel'>
+<div className='panel-head'><div><h2>Workspace Restore Recovery</h2><p>Pulihkan batch Route Master sebelumnya, bersihkan staging lama, dan tinjau aktivitas restore.</p></div><Button icon={<History size={16}/>} onClick={() => void loadWorkspaceRestoreRecovery()} disabled={workspaceRestoreRecoveryBusy || Boolean(workspaceRestoreRecoveryAction)}>{workspaceRestoreRecoveryBusy ? 'Memuat…' : 'Refresh recovery'}</Button></div>
+{!workspaceRestoreRecovery && <div className='integration-meta'><small>{workspaceRestoreRecoveryBusy ? 'Memuat status recovery workspace…' : 'Status recovery belum tersedia. Refresh untuk memuat data.'}</small></div>}
+{workspaceRestoreRecovery && <>
+<div className='master-db-card integration-card'>
+<span className='master-db-icon'><Database /></span>
+<div className='master-db-copy'><div className='master-db-title-row'><strong>Route Master aktif</strong><Badge tone={workspaceRestoreRecovery.recovery?.activeBatchId ? 'success' : 'warning'}>{workspaceRestoreRecovery.recovery?.activeBatchId ? 'Active batch' : 'Belum tersedia'}</Badge></div>
+<p>{workspaceRestoreRecovery.recovery?.activeBatchId || 'Belum ada current batch pointer'}</p>
+<div className='integration-meta'><small>{Number(workspaceRestoreRecovery.recovery?.activeCount || 0).toLocaleString('id-ID')} mapping aktif</small><small>Batch committed sebelumnya tetap disimpan untuk rollback.</small></div></div>
+</div>
+<div className='settings-grid restore-recovery-grid'>
+<div className='master-db-card integration-card restore-recovery-card'>
+<div className='master-db-copy'><div className='master-db-title-row'><strong>Committed batch history</strong><Badge>{workspaceRestoreRecovery.recovery?.committedBatches?.length || 0}</Badge></div><p>Aktifkan kembali versi Route Master sebelumnya. Batch aktif saat ini tidak dihapus.</p>
+<div className='restore-recovery-list'>
+{(workspaceRestoreRecovery.recovery?.committedBatches || []).length ? workspaceRestoreRecovery.recovery.committedBatches.map((batch: any) => <div className='restore-recovery-row' key={batch.id}>
+<div><strong>{batch.sourceFileName || batch.id}</strong><small>{batch.id}</small><small>{Number(batch.count || 0).toLocaleString('id-ID')} mapping · {batch.committedAt ? new Date(batch.committedAt).toLocaleString('id-ID') : 'Waktu commit tidak tersedia'}</small></div>
+{batch.id === workspaceRestoreRecovery.recovery?.activeBatchId ? <Badge tone='success'>Aktif</Badge> : <Button variant='secondary' className='restore-recovery-action' disabled={!canReactivateRouteMasterBatch(batch, workspaceRestoreRecovery.recovery?.activeBatchId || null) || workspaceRestoreRecoveryBusy || Boolean(workspaceRestoreRecoveryAction)} onClick={() => void reactivatePreviousRouteMaster(batch)}>{workspaceRestoreRecoveryAction === batch.id ? 'Memproses…' : 'Aktifkan'}</Button>}
+</div>) : <small>Belum ada batch committed yang tercatat.</small>}
+</div></div>
+</div>
+<div className='master-db-card integration-card restore-recovery-card'>
+<div className='master-db-copy'><div className='master-db-title-row'><strong>Staging cleanup</strong><Badge tone={(workspaceRestoreRecovery.recovery?.stagingBatches || []).some((batch: any) => batch.stale) ? 'warning' : 'success'}>{(workspaceRestoreRecovery.recovery?.stagingBatches || []).filter((batch: any) => batch.stale).length} stale</Badge></div><p>Hanya batch berstatus staging yang tidak memiliki aktivitas selama minimal 24 jam yang dapat dibersihkan.</p>
+<div className='restore-recovery-list'>
+{(workspaceRestoreRecovery.recovery?.stagingBatches || []).length ? workspaceRestoreRecovery.recovery.stagingBatches.map((batch: any) => <div className='restore-recovery-row' key={batch.id}>
+<div><strong>{batch.id}</strong><small>Terakhir aktif: {batch.lastActivityAt ? new Date(batch.lastActivityAt).toLocaleString('id-ID') : 'Waktu tidak tersedia'}</small><small>{batch.stale ? 'Tidak aktif ≥ 24 jam' : 'Masih dalam masa aman'}{batch.cleanupSupported === false ? ' · Jumlah chunk melewati batas cleanup otomatis' : ''}</small></div>
+{canCleanupStaleRouteMasterBatch(batch, workspaceRestoreRecovery.recovery?.activeBatchId || null) ? <Button variant='secondary' className='restore-recovery-action danger-action' disabled={workspaceRestoreRecoveryBusy || Boolean(workspaceRestoreRecoveryAction)} onClick={() => void cleanupStaleRouteMaster(batch)}>{workspaceRestoreRecoveryAction === batch.id ? 'Memproses…' : 'Bersihkan'}</Button> : batch.stale && batch.cleanupSupported === false ? <Badge tone='warning'>Manual review · 50+ chunk</Badge> : <Badge tone='muted'>Dipertahankan</Badge>}
+</div>) : <small>Tidak ada staging batch yang perlu ditinjau.</small>}
+</div>
+{workspaceRestoreRecovery.recovery?.stagingScanTruncated && <small>Hasil staging dibatasi 100 batch. Refresh atau lakukan pemeriksaan lanjutan jika jumlah batch melebihi batas ini.</small>}
+</div></div>
+</div>
+<div className='master-db-card integration-card restore-operation-history'>
+<div className='master-db-copy'><div className='master-db-title-row'><strong>Restore activity & audit history</strong><Badge>{workspaceRestoreRecovery.operations?.length || 0} aktivitas</Badge></div><p>Riwayat selective restore, reaktivasi batch, dan cleanup staging. Running yang tidak diperbarui selama satu jam ditandai perlu pemeriksaan, tanpa mengubah status tersimpan.</p>
+<div className='restore-recovery-list'>
+{(workspaceRestoreRecovery.operations || []).length ? workspaceRestoreRecovery.operations.map((operation: any) => {
+const displayedStatus = getRestoreOperationDisplayStatus(operation, clock);
+const statusTone = displayedStatus === 'completed' ? 'success' : displayedStatus === 'failed' || displayedStatus === 'partial' ? 'danger' : displayedStatus === 'needs-review' ? 'warning' : 'cyan';
+const operationLabel = operation.kind === 'selective-restore' ? 'Selective restore' : operation.kind === 'reactivate-route-master' ? 'Reaktivasi Route Master' : 'Cleanup staging';
+return <div className='restore-recovery-row' key={operation.id}>
+<div><strong>{operationLabel} · {operation.sourceFileName || operation.targetBatchId || operation.id}</strong><small>{operation.createdAt ? new Date(operation.createdAt).toLocaleString('id-ID') : 'Waktu tidak tersedia'} · {operation.createdByName || 'Admin'}</small><small>{(operation.selectedSections || []).join(', ') || operation.message || 'Recovery action'}</small>{operation.errors?.slice(0, 2).map((error: string, index: number) => <small key={index}>• {error}</small>)}</div>
+<Badge tone={statusTone}>{restoreOperationStatusLabel(displayedStatus)}</Badge>
+</div>;
+}) : <small>Belum ada aktivitas restore yang tercatat.</small>}
+</div></div>
+</div>
+</>}
+</section>}<div className='settings-note'><ShieldCheck size={20}/><div><strong>Admin only</strong><p>Perubahan template dan master database langsung tersedia untuk seluruh anggota melalui realtime sync.</p></div></div><div className='settings-grid'><ListEditor label='Groups / Regions' value={settingsDraft.groups} onChange={groups => setSettingsDraft(current => ({ ...current, groups }))} hint='Satu item per baris'/><ListEditor label='PIC Areas' value={settingsDraft.picAreas} onChange={picAreas => setSettingsDraft(current => ({ ...current, picAreas }))} hint='Area tanggung jawab'/><ListEditor label='PIC Names' value={settingsDraft.picNames} onChange={picNames => setSettingsDraft(current => ({ ...current, picNames }))} hint='Nama yang sering digunakan'/><ListEditor label='Root Causes' value={settingsDraft.rootCauses} onChange={rootCauses => setSettingsDraft(current => ({ ...current, rootCauses }))} hint='Tetap bisa input manual'/><ListEditor label='Actions' value={settingsDraft.actions} onChange={actions => setSettingsDraft(current => ({ ...current, actions }))} hint='Tindakan penanganan'/><ListEditor label='Quick Progress Phrases' value={settingsDraft.progressPhrases} onChange={progressPhrases => setSettingsDraft(current => ({ ...current, progressPhrases }))} hint='Maksimal 10 tampil sebagai chip'/><ListEditor label='Sites / Link Names' value={settingsDraft.sites} onChange={sites => setSettingsDraft(current => ({ ...current, sites }))} hint='Autocomplete site'/><Field label='SLA Critical (menit)'><input type='number' min={5} max={1440} value={settingsDraft.slaCriticalMinutes} onChange={event => setSettingsDraft(current => ({ ...current, slaCriticalMinutes: Number(event.target.value) }))}/></Field><Field label='SLA Major (menit)'><input type='number' min={5} max={1440} value={settingsDraft.slaMajorMinutes} onChange={event => setSettingsDraft(current => ({ ...current, slaMajorMinutes: Number(event.target.value) }))}/></Field><Field label='SLA Minor (menit)'><input type='number' min={5} max={1440} value={settingsDraft.slaMinorMinutes} onChange={event => setSettingsDraft(current => ({ ...current, slaMinorMinutes: Number(event.target.value) }))}/></Field><Field label='Batas update basi (menit)'><input type='number' min={5} max={1440} value={settingsDraft.staleUpdateMinutes} onChange={event => setSettingsDraft(current => ({ ...current, staleUpdateMinutes: Number(event.target.value) }))}/></Field></div></section></div>;
     const renderTeam = () => <div className='page-content'><header className='page-heading compact'><div><p className='eyebrow'>Access & permissions</p><h1>Workspace team</h1><p>Role ketat, workflow tetap cepat.</p></div>{isAdmin && <Button variant='primary' icon={<UserPlus size={17}/>} onClick={() => document.getElementById('invite-panel')?.scrollIntoView({ behavior: 'smooth' })}>Invite member</Button>}</header><div className='team-layout'><section className='panel member-panel'><div className='panel-head'><div><h2>{data.members.length} anggota</h2><p>Admin mengelola akses, Supervisor melakukan review.</p></div></div><div className='member-list'>{data.members.map(member => <article key={member.id}><span className='avatar'>{member.name.slice(0, 2).toUpperCase()}</span><div className='member-name'><strong>{member.name}</strong><small>{member.email}</small></div><Badge tone={member.role === 'admin' ? 'cyan' : member.role === 'supervisor' ? 'warning' : 'muted'}>{roleLabel(member.role)}</Badge>{isAdmin && member.userId !== data.profile.userId ? <><CustomSelect compact value={member.role} onChange={nextRole => void updateMemberRole(member.id, nextRole as Role)} options={roleOptions} ariaLabel={`Role ${member.name}`}/><button className='icon-button danger-action' onClick={() => void removeMember(member.id, member.name)}><Trash2 size={16}/></button></> : <span className='you-label'>{member.userId === data.profile.userId ? 'You' : ''}</span>}</article>)}</div></section><aside className='panel invite-panel' id='invite-panel'><span className='invite-icon'><UserPlus /></span><h2>Invite anggota</h2><p>Buat link sekali pakai dengan role yang sudah ditentukan. Link aktif selama tujuh hari.</p>{isAdmin ? <><Field label='Email' hint='Wajib · link hanya dapat dipakai email ini'><input type='email' value={inviteEmail} onChange={event => setInviteEmail(event.target.value)} placeholder='operator@company.com'/></Field><Field label='Role'><CustomSelect value={inviteRole} onChange={nextRole => setInviteRole(nextRole as Role)} options={inviteRoleOptions} ariaLabel='Role anggota baru'/></Field><Button variant='primary' icon={<Link2 size={16}/>} onClick={() => void createInvite()}>Generate invite link</Button>{inviteUrl && <div className='invite-result'><input readOnly value={inviteUrl}/><Button icon={<Copy size={15}/>} onClick={() => void copyText(inviteUrl, 'Link undangan disalin.')}>Copy</Button></div>}</> : <div className='settings-note'><ShieldCheck size={18}/><div><strong>Admin permission required</strong><p>Hubungi Admin untuk menambahkan anggota.</p></div></div>}</aside></div></div>;
     return <div className={`app-shell density-${density} ${sidebarCollapsed ? 'sidebar-is-collapsed' : ''} ${focusMode ? 'focus-mode' : ''}`}><AuroraEffects /><aside className={`sidebar ${menuOpen ? 'open' : ''}`}><div className='brand-lockup compact-brand'><span className='brand-mark'><Radio /></span><div><b>NOC Desk</b><small>Incident operations</small></div><button type='button' className='sidebar-collapse-toggle' aria-label={sidebarCollapsed ? 'Perluas sidebar' : 'Ciutkan sidebar'} onClick={() => setSidebarCollapsed(current => !current)}>{sidebarCollapsed ? <ChevronRight size={15}/> : <ChevronLeft size={15}/>}</button></div><nav><small>Workspace</small>{navItems.filter(item => !item.hidden).map(item => <button key={item.id} className={view === item.id || (item.id === 'archive' && view === 'editor') ? 'active' : ''} aria-current={view === item.id || (item.id === 'archive' && view === 'editor') ? 'page' : undefined} title={sidebarCollapsed ? item.label : undefined} onClick={() => { setView(item.id); setMenuOpen(false); }}>{item.icon}<span>{item.label}</span>{item.id === 'operations' && opsUnread > 0 && <em>{Math.min(99, opsUnread)}</em>}{item.id === 'archive' && activeIncidents.length > 0 && <em>{activeIncidents.length}</em>}</button>)}</nav>{runningItems.length > 0 && <section className='sidebar-running-mini'><header><strong>Running TT</strong><span>{runningItems.length}</span></header>{runningItems.slice(0, 3).map(item => <button type='button' className={item.overdue ? 'overdue' : ''} key={item.incident.id} onClick={() => void switchIncident(item.incident)}><i /><span><strong>{item.incident.incidentId || item.incident.group || 'Active TT'}</strong><small>{item.incident.picName || item.incident.severity}</small></span><b>{item.overdue ? 'OVER' : 'LIVE'}</b></button>)}</section>}<div className='sidebar-bottom'><button className='theme-button' onClick={() => setTheme(current => current === 'dark' ? 'light' : 'dark')}>{theme === 'dark' ? <Sun size={17}/> : <Moon size={17}/>}<span>{theme === 'dark' ? 'Light mode' : 'Dark mode'}</span></button><div className='profile-chip'><span>{data.profile.name.slice(0, 2).toUpperCase()}</span><div><strong>{data.profile.name}</strong><small>{roleLabel(data.profile.role)}</small></div><button onClick={() => void signOut()} title='Sign out'><LogOut size={16}/></button></div></div></aside>{menuOpen && <button className='sidebar-scrim' aria-label='Tutup menu' onClick={() => setMenuOpen(false)}/>}<main className='main-shell'>{view !== 'editor' && <CommandTopbar viewLabel={navItems.find(item => item.id === view)?.label || 'NOC Desk'} active={activeIncidents.length} critical={activeIncidents.filter(item => item.severity === 'Critical').length} overdue={activeIncidents.filter(item => incidentSlaState(item, data.settings, clock).overdue).length} opsUnread={opsUnread} density={density} onDensityChange={setDensity} onSearch={() => setCommandOpen(true)} onCreate={() => void createIncident()} onImport={() => setImportOpen(true)} onRunning={() => setRunningSwitcherOpen(true)}/>}<div className='mobile-topbar'><button aria-label='Buka menu' onClick={() => setMenuOpen(current => !current)}><Menu /></button><div><Radio /><span>{view === 'editor' ? 'Incident editor' : navItems.find(item => item.id === view)?.label || 'NOC Desk'}</span></div><button onClick={() => setTheme(current => current === 'dark' ? 'light' : 'dark')}>{theme === 'dark' ? <Sun /> : <Moon />}</button></div>{view === 'dashboard' && <PageErrorBoundary screenName="Dashboard"><DeferredScreen render={renderDashboard}/></PageErrorBoundary>}{view === 'operations' && <PageErrorBoundary screenName="Operations Center"><OperationsCenter signal={opsSignal} onOpenIncident={openIncident} onUnreadChange={setOpsUnread}/></PageErrorBoundary>}{view === 'reliability' && <PageErrorBoundary screenName="Reliability Analytics"><ReliabilityCenter signal={opsSignal}/></PageErrorBoundary>}{view === 'risk' && <PageErrorBoundary screenName="Risk Radar"><RiskRadar /></PageErrorBoundary>}{view === 'archive' && <PageErrorBoundary screenName="Archive"><DeferredScreen render={renderArchive}/></PageErrorBoundary>}{view === 'trash' && <PageErrorBoundary screenName="Trash"><DeferredScreen render={renderTrash}/></PageErrorBoundary>}{view === 'editor' && <PageErrorBoundary screenName="Incident Editor"><DeferredScreen render={renderEditor}/></PageErrorBoundary>}{view === 'tracker' && <PageErrorBoundary screenName="Cut Point Tracker"><CutPointTracker incidents={sortedIncidents} onOpenIncident={openIncident}/></PageErrorBoundary>}{view === 'handover' && <PageErrorBoundary screenName="Shift Handover"><ShiftHandoverCenter items={runningItems} onOpenIncident={openIncident}/></PageErrorBoundary>}{view === 'settings' && <PageErrorBoundary screenName="Settings"><DeferredScreen render={renderSettings}/></PageErrorBoundary>}{view === 'team' && <PageErrorBoundary screenName="Team Management"><DeferredScreen render={renderTeam}/></PageErrorBoundary>}</main><ParserImportModal open={importOpen} source={importText} reporter={user?.name || user?.email || ''} onSourceChange={setImportText} onClose={() => setImportOpen(false)} onConfirm={confirmParsedImport}/>{masterImportOpen && <div className='modal-backdrop' onClick={() => { if (!masterImportBusy) setMasterImportOpen(false); }}><div className='import-modal master-import-modal' onClick={event => event.stopPropagation()}><div className='modal-head'><div><span className='modal-icon'><FileSpreadsheet /></span><div><h2>Import route master database</h2><p>{masterFileName} · pilih worksheet dan pastikan mapping kolom benar sebelum disimpan.</p></div></div><button disabled={masterImportBusy} onClick={() => setMasterImportOpen(false)}><X /></button></div><div className='master-import-grid'><Field label='Worksheet'><CustomSelect value={masterSheetName} onChange={selectMasterSheet} options={masterSheetNames.map(name => ({ value: name, label: name }))} ariaLabel='Worksheet master data'/></Field><Field label='System Key column' hint='Auto-detected'><input value={systemKeyColumn} onChange={event => setSystemKeyColumn(event.target.value.toUpperCase().replace(/[^A-Z]/g, '').slice(0, 4))} placeholder='H'/></Field><Field label='Segment Route column' hint='Auto-detected'><input value={routeSegmentColumn} onChange={event => setRouteSegmentColumn(event.target.value.toUpperCase().replace(/[^A-Z]/g, '').slice(0, 4))} placeholder='A'/></Field></div><div className='master-import-summary'><div><strong>{masterImportPairs.length.toLocaleString('id-ID')}</strong><span>unique mapping terbaca</span></div><div><strong>{masterRowCount.toLocaleString('id-ID')}</strong><span>baris worksheet</span></div><div><strong>{systemKeyColumn || '—'} ↔ {routeSegmentColumn || '—'}</strong><span>kolom aktif</span></div></div><div className='master-preview-table'><div className='master-preview-head'><span>System Key</span><span>Segment Route</span></div>{masterImportPairs.slice(0, 7).map((pair, index) => <div className='master-preview-row' key={`${pair.systemKey}-${pair.routeSegment}-${index}`}><strong>{pair.systemKey}</strong><span>{pair.routeSegment}</span></div>)}{!masterImportPairs.length && <div className='master-preview-empty'>Belum ada pasangan valid dari kedua kolom ini.</div>}</div>{masterImportBusy && <div className='master-progress-wrap'><div className='master-progress'><span style={{ width: `${masterImportProgress}%` }}/></div><small>Uploading master data… {masterImportProgress}%</small></div>}<div className='modal-actions'><Button variant='ghost' onClick={() => setMasterImportOpen(false)} disabled={masterImportBusy}>Cancel</Button><Button variant='primary' icon={<Database size={16}/>} onClick={() => void importRouteMaster()} disabled={masterImportBusy || !masterImportPairs.length}>{routeMaster.length ? 'Replace database' : 'Import to database'}</Button></div></div></div>}{workspaceRestoreConfirmOpen && <div className='modal-backdrop' onClick={() => { if (!workspaceRestoreBusy) setWorkspaceRestoreConfirmOpen(false); }}>
 <div className='import-modal master-import-modal' role='dialog' aria-modal='true' aria-labelledby='workspace-restore-title' onClick={event => event.stopPropagation()}>

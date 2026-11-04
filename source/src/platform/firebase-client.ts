@@ -13,6 +13,8 @@ import {
   addRouteMasterChunk,
   bootstrapWorkspace,
   commitRouteMasterImport,
+  cleanupStaleRouteMasterBatch,
+  createWorkspaceRestoreOperation,
   createIncident,
   createInvite,
   createVersion,
@@ -21,6 +23,8 @@ import {
   exportWorkspaceBackup,
   getInvite,
   getRouteMaster,
+  getWorkspaceRestoreOperations,
+  getWorkspaceRestoreRecovery,
   getWorkspaceSettings,
   joinWorkspace,
   loadIncidentPage,
@@ -33,6 +37,8 @@ import {
   saveIncident,
   saveSettings,
   searchIncidents,
+  reactivateRouteMasterBatch,
+  updateWorkspaceRestoreOperation,
   softDeleteIncident,
   startRouteMasterImport,
   subscribeToWorkspace,
@@ -65,7 +71,9 @@ class FirebaseApiError extends Error {
 function apiError(error: unknown): FirebaseApiError {
   if (error instanceof FirebaseApiError) return error;
   if (error instanceof FirebaseRepositoryError) {
-    const status = error.code === 'revision_conflict' || error.code === 'settings_conflict' || error.code === 'route_master_conflict' ? 409
+    const status = error.code === 'revision_conflict' || error.code === 'settings_conflict'
+      || error.code === 'route_master_conflict' || error.code === 'route_master_cleanup_too_recent'
+      || error.code === 'route_master_cleanup_conflict' ? 409
       : error.code.includes('not_found') ? 404
       : error.code.includes('required') || error.code.includes('invalid') ? 400
       : 403;
@@ -125,6 +133,15 @@ async function getRequest(path: string): Promise<ApiResult> {
   if (path === '/api/settings') {
     const { profile } = await context();
     return ok({ settings: await getWorkspaceSettings(profile.workspaceId) });
+  }
+
+  if (path === '/api/workspace-restore/recovery') {
+    const { profile, user } = await context();
+    const [recovery, operations] = await Promise.all([
+      getWorkspaceRestoreRecovery(profile.workspaceId, user),
+      getWorkspaceRestoreOperations(profile.workspaceId, user),
+    ]);
+    return ok({ recovery, operations });
   }
 
   if (path === '/api/integrations/gemini/status') {
@@ -292,6 +309,39 @@ async function postRequest(path: string, body: Record<string, unknown> = {}): Pr
     return ok(result);
   }
 
+  if (path === '/api/workspace-restore/operations') {
+    if (!user) throw new FirebaseApiError('auth_required', 'Silakan masuk terlebih dahulu.', 401);
+    return ok(await createWorkspaceRestoreOperation(profile.workspaceId, user, {
+      kind: body.kind as never,
+      sourceFileName: String(body.sourceFileName || ''),
+      selectedSections: Array.isArray(body.selectedSections) ? body.selectedSections as string[] : [],
+      message: String(body.message || ''),
+      targetBatchId: String(body.targetBatchId || ''),
+    }));
+  }
+
+  if (path === '/api/route-master/recovery/reactivate') {
+    if (!user) throw new FirebaseApiError('auth_required', 'Silakan masuk terlebih dahulu.', 401);
+    return ok(await reactivateRouteMasterBatch(
+      profile.workspaceId,
+      user,
+      String(body.batchId || ''),
+      typeof body.expectedCurrentBatchId === 'string' && body.expectedCurrentBatchId
+        ? body.expectedCurrentBatchId
+        : null,
+    ));
+  }
+
+  if (path === '/api/route-master/recovery/cleanup-stale') {
+    if (!user) throw new FirebaseApiError('auth_required', 'Silakan masuk terlebih dahulu.', 401);
+    return ok(await cleanupStaleRouteMasterBatch(
+      profile.workspaceId,
+      user,
+      String(body.batchId || ''),
+      Number(body.expectedLastActivityAt || 0),
+    ));
+  }
+
   if (path === '/api/route-master/import/commit') {
     if (!user) throw new FirebaseApiError('auth_required', 'Silakan masuk terlebih dahulu.', 401);
     await commitRouteMasterImport(profile.workspaceId, user, String(body.batchId || ''), body);
@@ -368,6 +418,27 @@ async function putRequest(path: string, body: Record<string, unknown> = {}): Pro
     const expectedUpdatedAt = typeof payload._expectedUpdatedAt === 'number' ? payload._expectedUpdatedAt : undefined;
     delete payload._expectedUpdatedAt;
     return ok({ settings: await saveSettings(profile.workspaceId, user, payload as never, expectedUpdatedAt) });
+  }
+
+  const restoreOperationMatch = path.match(/^\/api\/workspace-restore\/operations\/([^/]+)$/);
+  if (restoreOperationMatch) {
+    await updateWorkspaceRestoreOperation(
+      profile.workspaceId,
+      user,
+      decodeURIComponent(restoreOperationMatch[1]),
+      {
+        status: body.status as never,
+        stage: typeof body.stage === 'string' ? body.stage : undefined,
+        message: typeof body.message === 'string' ? body.message : undefined,
+        errors: Array.isArray(body.errors) ? body.errors as string[] : [],
+        warnings: Array.isArray(body.warnings) ? body.warnings as string[] : [],
+        stagedBatchId: typeof body.stagedBatchId === 'string' || body.stagedBatchId === null ? body.stagedBatchId as string | null : undefined,
+        activeBatchId: typeof body.activeBatchId === 'string' || body.activeBatchId === null ? body.activeBatchId as string | null : undefined,
+        settingsRolledBack: typeof body.settingsRolledBack === 'boolean' ? body.settingsRolledBack : undefined,
+        deletedChunks: typeof body.deletedChunks === 'number' ? body.deletedChunks : undefined,
+      },
+    );
+    return ok({ updated: true });
   }
 
   const incidentMatch = path.match(/^\/api\/incidents\/([^/]+)$/);

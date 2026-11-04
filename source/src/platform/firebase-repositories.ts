@@ -12,6 +12,7 @@ import {
   setDoc as firestoreSetDoc,
   startAfter,
   Timestamp,
+  where,
   type DocumentData,
   type Query,
   type QueryDocumentSnapshot,
@@ -24,6 +25,11 @@ import { recordBatchWrite, recordDirectWrite, recordDocumentRead, recordListener
 import { decodeIncidentPageCursor, encodeIncidentPageCursor } from '../incident-pagination';
 import { createWorkspaceBackupBundle, type WorkspaceBackupBundle } from '../workspace-backup';
 import { validateRouteMasterChunkSet } from '../route-master-integrity';
+import {
+  STALE_ROUTE_MASTER_BATCH_MS,
+  type RestoreOperationKind,
+  type RestoreOperationStatus,
+} from '../workspace-restore-recovery';
 import { isFirestoreIncidentPayloadSafe, measureFirestoreDocumentBytes, MAX_FIRESTORE_INCIDENT_DOCUMENT_BYTES } from '../firestore-payload';
 import {
   defaultSettings,
@@ -838,6 +844,326 @@ export async function getRouteMaster(workspaceId: string): Promise<{ items: Arra
   return { items, meta };
 }
 
+async function assertWorkspaceAdmin(workspaceId: string, user: User): Promise<void> {
+  const member = await getDoc(doc(firestore, membersPath(workspaceId), user.uid));
+  if (!member.exists() || member.data().status !== 'active' || member.data().role !== 'admin') {
+    throw new FirebaseRepositoryError('admin_required', 'Recovery workspace hanya tersedia untuk Admin aktif.');
+  }
+}
+
+export interface WorkspaceRestoreRecoverySnapshot {
+  activeBatchId: string | null;
+  activeCount: number;
+  committedBatches: Array<Record<string, unknown> & { id: string }>;
+  stagingBatches: Array<Record<string, unknown> & { id: string; lastActivityAt: number; stale: boolean }>;
+  stagingScanTruncated: boolean;
+}
+
+export async function getWorkspaceRestoreRecovery(
+  workspaceId: string,
+  user: User,
+): Promise<WorkspaceRestoreRecoverySnapshot> {
+  await assertWorkspaceAdmin(workspaceId, user);
+  const batches = collection(firestore, workspacePath(workspaceId) + '/routeMasterBatches');
+  const [metaSnapshot, stagingSnapshot, committedSnapshot] = await Promise.all([
+    getDoc(doc(firestore, workspacePath(workspaceId) + '/routeMasterMeta/main')),
+    getDocs(query(batches, where('status', '==', 'staging'), limit(100))),
+    getDocs(query(batches, orderBy('committedAt', 'desc'), limit(25))),
+  ]);
+  const meta = metaSnapshot.exists() ? metaSnapshot.data() : null;
+  const activeBatchId = typeof meta?.currentBatchId === 'string' && meta.currentBatchId
+    ? meta.currentBatchId
+    : null;
+  const currentTime = now();
+  const stagingBatches = (await Promise.all(stagingSnapshot.docs.map(async (snapshot) => {
+    const data = snapshot.data();
+    const chunks = await getDocs(query(
+      collection(firestore, workspacePath(workspaceId) + '/routeMasterBatches/' + snapshot.id + '/chunks'),
+      orderBy('chunkIndex', 'asc'),
+      limit(51),
+    ));
+    const latestChunkActivityAt = chunks.docs.reduce((latest, chunk) =>
+      Math.max(latest, Number(chunk.data().createdAt) || 0), 0);
+    const lastActivityAt = Math.max(
+      Number(data.lastActivityAt) || 0,
+      Number(data.createdAt) || 0,
+      latestChunkActivityAt,
+    );
+    return {
+      ...data,
+      id: snapshot.id,
+      lastActivityAt,
+      cleanupSupported: chunks.size <= 50,
+      stale: snapshot.id !== activeBatchId
+        && lastActivityAt > 0
+        && currentTime - lastActivityAt >= STALE_ROUTE_MASTER_BATCH_MS,
+    };
+  }))).sort((left, right) => left.lastActivityAt - right.lastActivityAt);
+  const committedBatches = committedSnapshot.docs.map((snapshot) => ({
+    ...snapshot.data(),
+    id: snapshot.id,
+  }));
+  return {
+    activeBatchId,
+    activeCount: Number(meta?.count) || 0,
+    committedBatches,
+    stagingBatches,
+    stagingScanTruncated: stagingSnapshot.size >= 100,
+  };
+}
+
+export async function reactivateRouteMasterBatch(
+  workspaceId: string,
+  user: User,
+  batchId: string,
+  expectedCurrentBatchId: string | null,
+): Promise<{ activeBatchId: string; count: number }> {
+  await assertWorkspaceAdmin(workspaceId, user);
+  if (!batchId.trim()) throw new FirebaseRepositoryError('route_master_batch_required', 'Batch tujuan wajib dipilih.');
+  const batchRef = doc(firestore, workspacePath(workspaceId) + '/routeMasterBatches', batchId);
+  const metaRef = doc(firestore, workspacePath(workspaceId) + '/routeMasterMeta/main');
+  const chunksQuery = query(
+    collection(firestore, workspacePath(workspaceId) + '/routeMasterBatches/' + batchId + '/chunks'),
+    orderBy('chunkIndex', 'asc'),
+    limit(60),
+  );
+  const initialBatch = await getDoc(batchRef);
+  if (!initialBatch.exists() || initialBatch.data().status !== 'committed') {
+    throw new FirebaseRepositoryError('route_master_batch_not_recoverable', 'Hanya batch Route Master berstatus committed yang dapat diaktifkan kembali.');
+  }
+  const stagedChunks = await getDocs(chunksQuery);
+  if (!stagedChunks.size || stagedChunks.size > 50) {
+    throw new FirebaseRepositoryError('route_master_batch_invalid', 'Jumlah chunk batch lama tidak valid untuk recovery otomatis.');
+  }
+  const targetCount = Number(initialBatch.data().count) || 0;
+  const expectedFingerprint = typeof initialBatch.data().fingerprint === 'string'
+    ? initialBatch.data().fingerprint
+    : undefined;
+
+  const result = await runTransaction(firestore, async (transaction) => {
+    const [latestBatch, latestMeta] = await Promise.all([
+      transaction.get(batchRef),
+      transaction.get(metaRef),
+    ]);
+    const latestChunks = await Promise.all(stagedChunks.docs.map((item) => transaction.get(item.ref)));
+    if (!latestBatch.exists() || latestBatch.data().status !== 'committed') {
+      throw new FirebaseRepositoryError('route_master_batch_not_recoverable', 'Batch tujuan berubah dan tidak lagi berstatus committed.');
+    }
+    const activeValue = latestMeta.exists() && typeof latestMeta.data().currentBatchId === 'string'
+      ? latestMeta.data().currentBatchId
+      : '';
+    const activeBatchId = activeValue || null;
+    if (activeBatchId !== expectedCurrentBatchId) {
+      throw new FirebaseRepositoryError('route_master_conflict', 'Route Master aktif berubah sebelum recovery. Muat ulang daftar batch.');
+    }
+    if (activeBatchId === batchId) {
+      throw new FirebaseRepositoryError('route_master_batch_already_active', 'Batch yang dipilih sudah menjadi batch aktif.');
+    }
+    const validation = validateRouteMasterChunkSet(
+      latestChunks.map((item) => ({
+        chunkIndex: item.exists() ? Number(item.data().chunkIndex) : Number.NaN,
+        items: item.exists() ? item.data().items : null,
+      })),
+      targetCount,
+      expectedFingerprint,
+    );
+    if (!validation.valid) {
+      throw new FirebaseRepositoryError('route_master_batch_invalid', 'Batch lama tidak lolos pemeriksaan integritas: ' + validation.errors.join(' '));
+    }
+
+    const target = latestBatch.data();
+    const activatedAt = now();
+    transaction.set(metaRef, {
+      ...(latestMeta.exists() ? latestMeta.data() : {}),
+      currentBatchId: batchId,
+      count: validation.count,
+      fileName: String(target.sourceFileName || 'Recovered Route Master'),
+      sheetName: String(target.sourceSheetName || 'Previous committed batch'),
+      systemKeyColumn: String(target.systemKeyColumn || ''),
+      routeSegmentColumn: String(target.routeSegmentColumn || ''),
+      updatedAt: activatedAt,
+      updatedBy: user.uid,
+      updatedByName: user.displayName || user.email || '',
+      recoveredFromBatchId: activeBatchId,
+    });
+    transaction.update(batchRef, {
+      lastActivatedAt: activatedAt,
+      lastActivatedBy: user.uid,
+    });
+    return { activeBatchId: batchId, count: validation.count };
+  });
+  recordBatchWrite(2);
+  return result;
+}
+
+export async function cleanupStaleRouteMasterBatch(
+  workspaceId: string,
+  user: User,
+  batchId: string,
+  expectedLastActivityAt: number,
+): Promise<{ deletedChunks: number }> {
+  await assertWorkspaceAdmin(workspaceId, user);
+  if (!batchId.trim() || !Number.isFinite(expectedLastActivityAt)) {
+    throw new FirebaseRepositoryError('route_master_cleanup_input_invalid', 'Identitas batch staging untuk cleanup tidak valid.');
+  }
+  const batchRef = doc(firestore, workspacePath(workspaceId) + '/routeMasterBatches', batchId);
+  const metaRef = doc(firestore, workspacePath(workspaceId) + '/routeMasterMeta/main');
+  const chunksQuery = query(
+    collection(firestore, workspacePath(workspaceId) + '/routeMasterBatches/' + batchId + '/chunks'),
+    orderBy('chunkIndex', 'asc'),
+    limit(60),
+  );
+  const initialChunks = await getDocs(chunksQuery);
+  if (initialChunks.size > 50) {
+    throw new FirebaseRepositoryError('route_master_cleanup_chunk_limit', 'Batch memiliki lebih dari 50 chunk; cleanup otomatis dibatalkan untuk pemeriksaan manual.');
+  }
+
+  const deletedChunks = await runTransaction(firestore, async (transaction) => {
+    const [latestBatch, latestMeta] = await Promise.all([
+      transaction.get(batchRef),
+      transaction.get(metaRef),
+    ]);
+    const latestChunks = await Promise.all(initialChunks.docs.map((item) => transaction.get(item.ref)));
+    if (!latestBatch.exists() || latestBatch.data().status !== 'staging') {
+      throw new FirebaseRepositoryError('route_master_cleanup_not_staging', 'Hanya batch berstatus staging yang boleh dibersihkan.');
+    }
+    const activeValue = latestMeta.exists() && typeof latestMeta.data().currentBatchId === 'string'
+      ? latestMeta.data().currentBatchId
+      : '';
+    if (activeValue === batchId) {
+      throw new FirebaseRepositoryError('route_master_cleanup_active', 'Batch aktif tidak dapat dibersihkan.');
+    }
+    if (latestChunks.some((item) => !item.exists())) {
+      throw new FirebaseRepositoryError('route_master_cleanup_conflict', 'Isi batch berubah ketika cleanup berlangsung. Muat ulang daftar recovery.');
+    }
+    const lastChunkActivityAt = latestChunks.reduce((latest, item) =>
+      item.exists() ? Math.max(latest, Number(item.data().createdAt) || 0) : latest, 0);
+    const actualActivityAt = Math.max(
+      Number(latestBatch.data().lastActivityAt) || 0,
+      lastChunkActivityAt,
+      Number(latestBatch.data().createdAt) || 0,
+    );
+    if (actualActivityAt !== expectedLastActivityAt) {
+      throw new FirebaseRepositoryError('route_master_conflict', 'Batch mendapat aktivitas baru sejak daftar recovery dimuat. Cleanup dibatalkan.');
+    }
+    if (now() - actualActivityAt < STALE_ROUTE_MASTER_BATCH_MS) {
+      throw new FirebaseRepositoryError('route_master_cleanup_too_recent', 'Batch staging belum melewati masa aman 24 jam sejak aktivitas terakhir.');
+    }
+    for (const item of initialChunks.docs) transaction.delete(item.ref);
+    transaction.delete(batchRef);
+    return initialChunks.size;
+  });
+  recordBatchWrite(deletedChunks + 1);
+  return { deletedChunks };
+}
+
+export async function createWorkspaceRestoreOperation(
+  workspaceId: string,
+  user: User,
+  input: {
+    kind: RestoreOperationKind;
+    sourceFileName?: string;
+    selectedSections?: string[];
+    message?: string;
+    targetBatchId?: string;
+  },
+): Promise<{ id: string; createdAt: number }> {
+  await assertWorkspaceAdmin(workspaceId, user);
+  const allowedKinds: RestoreOperationKind[] = [
+    'selective-restore',
+    'reactivate-route-master',
+    'cleanup-stale-route-master',
+  ];
+  if (!allowedKinds.includes(input.kind)) {
+    throw new FirebaseRepositoryError('restore_operation_kind_invalid', 'Jenis aktivitas restore tidak dikenali.');
+  }
+  const id = newId();
+  const createdAt = now();
+  await setDoc(doc(firestore, workspacePath(workspaceId) + '/restoreOperations', id), {
+    id,
+    kind: input.kind,
+    status: 'running',
+    stage: 'starting',
+    message: String(input.message || 'Recovery operation started').slice(0, 300),
+    sourceFileName: String(input.sourceFileName || '').slice(0, 180),
+    selectedSections: (input.selectedSections || []).filter((item) => ['settings', 'routeMaster'].includes(item)).slice(0, 2),
+    targetBatchId: String(input.targetBatchId || '').slice(0, 120),
+    createdAt,
+    updatedAt: createdAt,
+    createdBy: user.uid,
+    createdByName: user.displayName || user.email || '',
+    events: [{ at: createdAt, stage: 'starting', message: String(input.message || 'Recovery operation started').slice(0, 300) }],
+  });
+  return { id, createdAt };
+}
+
+export async function updateWorkspaceRestoreOperation(
+  workspaceId: string,
+  user: User,
+  operationId: string,
+  update: {
+    status: RestoreOperationStatus;
+    stage?: string;
+    message?: string;
+    errors?: string[];
+    warnings?: string[];
+    stagedBatchId?: string | null;
+    activeBatchId?: string | null;
+    settingsRolledBack?: boolean;
+    deletedChunks?: number;
+  },
+): Promise<void> {
+  await assertWorkspaceAdmin(workspaceId, user);
+  const statuses: RestoreOperationStatus[] = ['running', 'completed', 'failed', 'partial', 'needs-review'];
+  if (!operationId.trim() || !statuses.includes(update.status)) {
+    throw new FirebaseRepositoryError('restore_operation_update_invalid', 'Pembaruan aktivitas restore tidak valid.');
+  }
+  const reference = doc(firestore, workspacePath(workspaceId) + '/restoreOperations', operationId);
+  await runTransaction(firestore, async (transaction) => {
+    const snapshot = await transaction.get(reference);
+    if (!snapshot.exists() || snapshot.data().createdBy !== user.uid || snapshot.data().status !== 'running') {
+      throw new FirebaseRepositoryError('restore_operation_not_updatable', 'Aktivitas restore tidak ditemukan, bukan milik Admin ini, atau sudah final.');
+    }
+    const current = snapshot.data();
+    const updatedAt = now();
+    const stage = String(update.stage || current.stage || 'running').slice(0, 80);
+    const message = String(update.message || current.message || '').slice(0, 300);
+    const events = Array.isArray(current.events) ? [...current.events] : [];
+    if ((update.stage || update.status !== 'running' || update.message) && events.length < 30) {
+      events.push({ at: updatedAt, stage, message, status: update.status });
+    }
+    const patch: Record<string, unknown> = {
+      status: update.status,
+      stage,
+      message,
+      updatedAt,
+      events,
+      errors: (update.errors || []).filter((item) => typeof item === 'string').slice(0, 10).map((item) => item.slice(0, 500)),
+      warnings: (update.warnings || []).filter((item) => typeof item === 'string').slice(0, 10).map((item) => item.slice(0, 500)),
+    };
+    if (update.stagedBatchId !== undefined) patch.stagedBatchId = update.stagedBatchId;
+    if (update.activeBatchId !== undefined) patch.activeBatchId = update.activeBatchId;
+    if (update.settingsRolledBack !== undefined) patch.settingsRolledBack = update.settingsRolledBack;
+    if (update.deletedChunks !== undefined) patch.deletedChunks = update.deletedChunks;
+    if (update.status !== 'running') patch.finishedAt = updatedAt;
+    transaction.update(reference, patch);
+  });
+  recordBatchWrite(1);
+}
+
+export async function getWorkspaceRestoreOperations(
+  workspaceId: string,
+  user: User,
+): Promise<Array<Record<string, unknown> & { id: string }>> {
+  await assertWorkspaceAdmin(workspaceId, user);
+  const snapshot = await getDocs(query(
+    collection(firestore, workspacePath(workspaceId) + '/restoreOperations'),
+    orderBy('createdAt', 'desc'),
+    limit(30),
+  ));
+  return snapshot.docs.map((item) => ({ ...item.data(), id: item.id }));
+}
+
 export async function exportWorkspaceBackup(workspaceId: string, user: User): Promise<WorkspaceBackupBundle> {
   const memberSnapshot = await getDoc(doc(firestore, membersPath(workspaceId), user.uid));
   if (!memberSnapshot.exists() || memberSnapshot.data().status !== 'active' || memberSnapshot.data().role !== 'admin') {
@@ -907,9 +1233,12 @@ export async function exportWorkspaceBackup(workspaceId: string, user: User): Pr
 
 export async function startRouteMasterImport(workspaceId: string, user: User): Promise<string> {
   const batchId = newId();
+  const createdAt = now();
   await setDoc(doc(firestore, workspacePath(workspaceId) + '/routeMasterBatches', batchId), {
-    createdAt: now(),
+    createdAt,
+    lastActivityAt: createdAt,
     createdBy: user.uid,
+    createdByName: user.displayName || user.email || '',
     status: 'staging',
   });
   return batchId;
@@ -922,11 +1251,28 @@ export async function addRouteMasterChunk(
   items: Array<{ systemKey: string; routeSegment: string }>,
   user: User,
 ): Promise<void> {
-  if (items.length > 400) throw new FirebaseRepositoryError('route_master_chunk_too_large', 'Maksimal 400 mapping per batch.');
-  await setDoc(
-    doc(firestore, workspacePath(workspaceId) + '/routeMasterBatches/' + batchId + '/chunks', String(chunkIndex).padStart(4, '0')),
-    { chunkIndex, items, createdAt: now(), createdBy: user.uid },
-  );
+  if (!batchId.trim() || !Number.isInteger(chunkIndex) || chunkIndex < 0 || chunkIndex >= 50
+    || !Array.isArray(items) || items.length < 1 || items.length > 400) {
+    throw new FirebaseRepositoryError('route_master_chunk_invalid', 'Chunk Route Master tidak valid. Maksimal 400 mapping per chunk dan 50 chunk per batch.');
+  }
+  const batchRef = doc(firestore, workspacePath(workspaceId) + '/routeMasterBatches', batchId);
+  const chunkRef = doc(firestore, workspacePath(workspaceId) + '/routeMasterBatches/' + batchId + '/chunks', String(chunkIndex).padStart(4, '0'));
+  await runTransaction(firestore, async (transaction) => {
+    const batchSnapshot = await transaction.get(batchRef);
+    if (!batchSnapshot.exists() || batchSnapshot.data().status !== 'staging') {
+      throw new FirebaseRepositoryError('route_master_staging_not_found', 'Batch staging tidak tersedia atau sudah tidak menerima chunk.');
+    }
+    // Always advance the heartbeat, even when two writes land in the same millisecond.
+    const activityAt = Math.max(now(), (Number(batchSnapshot.data().lastActivityAt) || 0) + 1);
+    transaction.set(chunkRef, {
+      chunkIndex,
+      items,
+      createdAt: activityAt,
+      createdBy: user.uid,
+    });
+    transaction.update(batchRef, { lastActivityAt: activityAt });
+  });
+  recordBatchWrite(2);
 }
 
 export async function verifyRouteMasterImport(
@@ -1000,6 +1346,13 @@ export async function commitRouteMasterImport(
     ...publicMetadata
   } = metadata;
 
+  const initialBatchSnapshot = await getDoc(batchRef);
+  if (!initialBatchSnapshot.exists() || initialBatchSnapshot.data().status !== 'staging') {
+    throw new FirebaseRepositoryError('route_master_staging_not_found', 'Batch staging Route Master sudah tidak tersedia.');
+  }
+  const initialActivityAt = Number(initialBatchSnapshot.data().lastActivityAt)
+    || Number(initialBatchSnapshot.data().createdAt)
+    || 0;
   const stagedChunkRefs = await getDocs(chunksQuery);
   await runTransaction(firestore, async (transaction) => {
     // The web SDK transaction API reads document references, not queries.
@@ -1012,6 +1365,12 @@ export async function commitRouteMasterImport(
     const latestChunks = await Promise.all(stagedChunkRefs.docs.map((item) => transaction.get(item.ref)));
     if (!latestBatch.exists() || latestBatch.data().status !== 'staging') {
       throw new FirebaseRepositoryError('route_master_staging_not_found', 'Batch staging Route Master sudah tidak tersedia.');
+    }
+    const latestActivityAt = Number(latestBatch.data().lastActivityAt)
+      || Number(latestBatch.data().createdAt)
+      || 0;
+    if (latestActivityAt !== initialActivityAt) {
+      throw new FirebaseRepositoryError('route_master_conflict', 'Batch Route Master menerima perubahan setelah verifikasi awal. Ulangi verifikasi sebelum commit.');
     }
 
     const validation = validateRouteMasterChunkSet(
@@ -1039,10 +1398,19 @@ export async function commitRouteMasterImport(
 
     // Batch status and active pointer are switched atomically with an optimistic
     // concurrency check. The previous committed batch is intentionally retained.
+    const committedAt = now();
     transaction.update(batchRef, {
       status: 'committed',
-      committedAt: now(),
+      committedAt,
+      lastActivityAt: committedAt,
       count: validation.count,
+      fingerprint: expectedFingerprint || null,
+      sourceFileName: String(publicMetadata.fileName || ''),
+      sourceSheetName: String(publicMetadata.sheetName || ''),
+      systemKeyColumn: String(publicMetadata.systemKeyColumn || ''),
+      routeSegmentColumn: String(publicMetadata.routeSegmentColumn || ''),
+      committedBy: user.uid,
+      committedByName: user.displayName || user.email || '',
     });
     transaction.set(metaRef, {
       ...publicMetadata,
