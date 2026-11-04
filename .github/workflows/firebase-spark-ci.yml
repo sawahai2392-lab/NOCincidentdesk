@@ -7,6 +7,7 @@ on:
       - 'fix/phase6-*'
       - 'fix/phase7-*'
       - 'fix/phase8-*'
+      - 'fix/phase9-*'
   pull_request:
     branches:
       - feat/tt-editor-quick-updates
@@ -19,6 +20,7 @@ on:
       - 'fix/phase6-*'
       - 'fix/phase7-*'
       - 'fix/phase8-*'
+      - 'fix/phase9-*'
   workflow_dispatch:
 
 permissions:
@@ -81,3 +83,7 @@ jobs:
       - name: Firestore usage observability tests
         working-directory: source
         run: npm run test:usage
+
+      - name: Workspace backup validation tests
+        working-directory: source
+        run: npm run test:backup
