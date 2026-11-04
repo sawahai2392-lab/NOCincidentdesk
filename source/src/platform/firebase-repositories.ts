@@ -1388,10 +1388,11 @@ export async function applyWorkspaceIntegrityRepairs(
         });
         if (outcome === 'applied') applied += 1;
         else skipped += 1;
+        operationStatus = outcome;
       } else {
         throw new FirebaseRepositoryError('integrity_repair_kind_invalid', 'Jenis repair tidak didukung.');
       }
-      operations.push({ id: operation.id, kind: operation.kind, status: applied + skipped > 0 ? 'checked' : 'checked' });
+      operations.push({ id: operation.id, kind: operation.kind, status: operationStatus });
     } catch (error) {
       const message = error instanceof Error ? error.message : 'Repair gagal diproses.';
       errors.push(String(operation.id || operation.kind || 'operation') + ': ' + message);
