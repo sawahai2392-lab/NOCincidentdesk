@@ -1,0 +1,35 @@
+@media (hover:hover) and (pointer:fine) {
+  .sidebar nav button:hover,.theme-button:hover { color:var(--text); background:linear-gradient(90deg,color-mix(in srgb,var(--accent-soft) 72%,var(--surface-2)),var(--surface-2)); transform:translateX(3px); }
+  .profile-chip button:hover,.mobile-topbar button:hover,.back-button:hover,.drawer-head button:hover,.modal-head button:hover,.close-mobile-preview:hover,.history-drawer article > button:hover { color:var(--text); background:var(--surface-3); transform:translateY(-1px); }
+  .button:hover:not(:disabled) { border-color:color-mix(in srgb,var(--accent) 23%,var(--border-strong)); transform:translateY(-2px); box-shadow:0 8px 20px rgba(0,0,0,.13); }
+  .button.primary:hover:not(:disabled) { background:linear-gradient(140deg,#79f5d0,#31d9a5); box-shadow:0 12px 30px rgba(29,204,151,.28); }
+  .metric-grid article:hover { border-color:color-mix(in srgb,var(--accent) 18%,var(--border-strong)); transform:translateY(-3px); }
+  .incident-row:hover { background:linear-gradient(90deg,color-mix(in srgb,var(--accent-soft) 48%,var(--surface-2)),var(--surface-2)); transform:translateX(4px); box-shadow:inset 3px 0 0 color-mix(in srgb,var(--accent) 55%,transparent); }
+  .activity-list button:hover { background:var(--surface-2); transform:translateX(2px); }
+  input:hover:not(:focus),textarea:hover:not(:focus),.select-trigger:hover { border-color:color-mix(in srgb,var(--accent) 16%,var(--border-strong)); background:color-mix(in srgb,var(--surface-3) 92%,var(--accent) 8%); }
+  .select-option:hover,.combo-menu button:hover { color:var(--text); background:color-mix(in srgb,var(--accent-soft) 62%,var(--surface-3)); transform:translateX(4px); }
+  .record-row:hover { background:linear-gradient(90deg,color-mix(in srgb,var(--accent-soft) 35%,var(--surface-2)),var(--surface-2)); transform:translateX(3px); }
+  .row-actions button:hover,.icon-button:hover { color:var(--text); background:var(--surface-3); transform:translateY(-1px) scale(1.04); }
+  .danger-action:hover { color:var(--danger)!important; background:var(--danger-soft)!important; }
+  .form-section:hover:not(:focus-within) { border-color:color-mix(in srgb,var(--accent) 13%,var(--border-strong)); }
+  .quick-phrases button:hover { color:var(--accent); background:color-mix(in srgb,var(--accent-soft) 82%,var(--surface)); transform:translateY(-1px); }
+  .timeline-item:hover { background:linear-gradient(90deg,color-mix(in srgb,var(--accent-soft) 44%,var(--surface-2)),color-mix(in srgb,var(--surface-2) 96%,var(--accent) 4%)); transform:translateY(-1px); }
+  .upload-zone:hover { border-color:color-mix(in srgb,var(--accent) 48%,var(--border-strong)); background:color-mix(in srgb,var(--accent-soft) 82%,var(--surface)); transform:translateY(-2px); }
+  .cut-point-card:hover { border-color:color-mix(in srgb,var(--accent) 28%,var(--border-strong)); transform:translateY(-1px); }
+}
+.button:active:not(:disabled),.back-button:active,.icon-button:active,.row-actions button:active,.profile-chip button:active,.mobile-topbar button:active { transform:translateY(0) scale(.965); }
+.incident-row:active,.record-row:active { transform:translateX(1px) scale(.997); }
+@media (prefers-reduced-motion:reduce) { .button,.sidebar nav button,.theme-button,.incident-row,.record-row,.metric-grid article,.select-option,.combo-menu button,.timeline-item,.upload-zone,.master-db-card,.cut-point-card,.icon-button { transition-duration:.01ms!important; transform:none!important; } }
+@keyframes pulse { 50% { opacity:.35; } }
+@keyframes loading { from { transform:translateX(-100%); } to { transform:translateX(230%); } }
+@keyframes slideIn { from { transform:translateX(100%); } }
+@keyframes popIn { from { opacity:0; transform:scale(.97); } }
+@keyframes toastIn { from { opacity:0; transform:translateY(10px); } }
+@keyframes fadeIn { from { opacity:0; } }
+@keyframes scaleIn { from { opacity:0; transform:scaleY(.3); } }
+@keyframes pageReveal { from { opacity:0; transform:translateY(9px); } }
+@keyframes surfaceReveal { from { opacity:0; transform:translateY(7px) scale(.995); } }
+@keyframes metricReveal { from { opacity:0; transform:translateY(13px) scale(.98); } }
+@keyframes formReveal { from { opacity:0; transform:translateY(12px); } }
+@keyframes timelineReveal { from { opacity:0; transform:translateX(-7px); } }
+@keyframes dropdownIn { from { opacity:0; transform:translateY(-6px) scale(.985); } }

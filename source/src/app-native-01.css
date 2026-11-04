@@ -1,0 +1,104 @@
+:root {
+  color-scheme: dark;
+  --bg: #07100e;
+  --bg-soft: #0a1512;
+  --sidebar: #081210;
+  --surface: #0d1a17;
+  --surface-2: #11211d;
+  --surface-3: #162a25;
+  --glass: rgba(13, 26, 23, .86);
+  --border: rgba(167, 214, 199, .12);
+  --border-strong: rgba(167, 214, 199, .22);
+  --text: #edf8f4;
+  --muted: #849d95;
+  --muted-2: #60766f;
+  --accent: #3ee6b3;
+  --accent-strong: #18c994;
+  --accent-soft: rgba(62, 230, 179, .11);
+  --danger: #ff6f7d;
+  --danger-soft: rgba(255, 111, 125, .11);
+  --warning: #f2bc63;
+  --warning-soft: rgba(242, 188, 99, .11);
+  --cyan: #63d9ed;
+  --cyan-soft: rgba(99, 217, 237, .11);
+  --shadow: 0 24px 64px rgba(0, 0, 0, .28);
+  --shadow-soft: 0 12px 34px rgba(0, 0, 0, .14);
+  --radius: 18px;
+  --radius-sm: 12px;
+  --ease-out: cubic-bezier(.22, 1, .36, 1);
+  --ease-spring: cubic-bezier(.2, .9, .25, 1.22);
+  font-family: Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+}
+
+:root[data-theme='light'] {
+  color-scheme: light;
+  --bg: #f2f6f4;
+  --bg-soft: #eaf1ee;
+  --sidebar: #fbfdfc;
+  --surface: #ffffff;
+  --surface-2: #f5f9f7;
+  --surface-3: #e9f2ee;
+  --glass: rgba(255, 255, 255, .88);
+  --border: rgba(26, 65, 53, .11);
+  --border-strong: rgba(26, 65, 53, .21);
+  --text: #10221c;
+  --muted: #637b73;
+  --muted-2: #80938d;
+  --accent: #0eae7e;
+  --accent-strong: #087f5d;
+  --accent-soft: rgba(14, 174, 126, .09);
+  --danger: #d94b5c;
+  --danger-soft: rgba(217, 75, 92, .09);
+  --warning: #b77a1d;
+  --warning-soft: rgba(183, 122, 29, .09);
+  --cyan: #168aa3;
+  --cyan-soft: rgba(22, 138, 163, .09);
+  --shadow: 0 20px 55px rgba(30, 60, 48, .11);
+}
+
+* { box-sizing: border-box; }
+html { min-width: 320px; scroll-behavior: smooth; background: var(--bg); }
+body { margin: 0; min-width: 320px; min-height: 100vh; background: radial-gradient(circle at 82% -10%, var(--accent-soft), transparent 28%), var(--bg); color: var(--text); font-size: 14px; -webkit-font-smoothing: antialiased; }
+button, input, textarea { font: inherit; }
+button { color: inherit; }
+button, a { -webkit-tap-highlight-color: transparent; }
+button:focus-visible, input:focus-visible, textarea:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+::selection { color: #04100c; background: var(--accent); }
+::-webkit-scrollbar { width: 9px; height: 9px; }
+::-webkit-scrollbar-thumb { background: var(--border-strong); border: 2px solid transparent; border-radius: 999px; background-clip: padding-box; }
+
+.app-shell { min-height: 100vh; }
+.main-shell { min-height: 100vh; margin-left: 244px; background: linear-gradient(180deg, transparent, rgba(0, 0, 0, .025)); }
+.page-content { width: min(1500px, 100%); margin: 0 auto; padding: 38px 42px 60px; animation: pageReveal .46s var(--ease-out) both; }
+.sidebar { position: fixed; z-index: 30; inset: 0 auto 0 0; width: 244px; display: flex; flex-direction: column; padding: 26px 18px 18px; background: var(--sidebar); border-right: 1px solid var(--border); }
+.brand-lockup { display: flex; align-items: center; gap: 13px; }
+.brand-lockup b { display: block; font-size: 15px; letter-spacing: -.02em; }
+.brand-lockup small { display: block; margin-top: 3px; color: var(--muted); font-size: 11px; }
+.brand-mark { width: 39px; height: 39px; display: inline-flex; align-items: center; justify-content: center; flex: 0 0 auto; color: #06120e; background: linear-gradient(145deg, #72f3cb, #24c995); border-radius: 12px; box-shadow: 0 10px 24px rgba(37, 215, 161, .2); }
+.brand-mark svg { width: 20px; height: 20px; }
+.brand-mark.large { width: 58px; height: 58px; border-radius: 18px; }
+.compact-brand { padding: 0 7px 27px; }
+.sidebar nav { flex: 1; }
+.sidebar nav > small { display: block; margin: 12px 10px 10px; color: var(--muted-2); font-size: 10px; font-weight: 750; letter-spacing: .12em; text-transform: uppercase; }
+.sidebar nav button, .theme-button { position: relative; width: 100%; height: 44px; display: flex; align-items: center; gap: 12px; padding: 0 12px; border: 0; border-radius: 11px; color: var(--muted); background: transparent; cursor: pointer; transition: color .2s ease, background .2s ease, transform .2s var(--ease-out); }
+.sidebar nav button:hover, .theme-button:hover { color: var(--text); background: var(--surface-2); }
+.sidebar nav button.active { color: var(--text); background: var(--accent-soft); box-shadow: inset 0 0 0 1px rgba(62, 230, 179, .08); }
+.sidebar nav button.active::before { content: ''; position: absolute; left: -7px; width: 3px; height: 20px; border-radius: 6px; background: var(--accent); box-shadow: 0 0 16px rgba(62, 230, 179, .48); animation: scaleIn .28s var(--ease-spring) both; }
+.sidebar nav button.active svg { color: var(--accent); }
+.sidebar nav button em { min-width: 21px; height: 21px; margin-left: auto; display: inline-flex; align-items: center; justify-content: center; border-radius: 7px; color: var(--accent); background: var(--accent-soft); font-size: 11px; font-style: normal; font-weight: 750; }
+.sidebar-bottom { display: grid; gap: 11px; }
+.profile-chip { display: flex; align-items: center; gap: 10px; padding: 10px; border: 1px solid var(--border); border-radius: 14px; background: var(--surface); }
+.profile-chip > span, .avatar { width: 33px; height: 33px; display: inline-flex; align-items: center; justify-content: center; flex: 0 0 auto; border-radius: 10px; color: var(--accent); background: var(--accent-soft); font-size: 11px; font-weight: 800; }
+.profile-chip > div { min-width: 0; flex: 1; }
+.profile-chip strong, .profile-chip small { display: block; overflow: hidden; white-space: nowrap; text-overflow: ellipsis; }
+.profile-chip strong { font-size: 12px; }
+.profile-chip small { margin-top: 2px; color: var(--muted); font-size: 10px; }
+.profile-chip button, .mobile-topbar button { padding: 5px; border: 0; color: var(--muted); background: transparent; cursor: pointer; }
+.mobile-topbar, .mobile-nav { display: none; }
+
+.page-heading { display: flex; align-items: flex-end; justify-content: space-between; gap: 28px; margin-bottom: 30px; }
+.page-heading.compact { align-items: center; }
+.page-heading h1 { margin: 3px 0 6px; font-size: clamp(28px, 3vw, 42px); line-height: 1.06; letter-spacing: -.045em; }
+.page-heading.compact h1 { font-size: 32px; }
+.page-heading p { margin: 0; color: var(--muted); }
+.eyebrow { color: var(--accent) !important; font-size: 10px; font-weight: 800; letter-spacing: .14em; text-transform: uppercase; }

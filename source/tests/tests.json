@@ -1,0 +1,128 @@
+[
+  {
+    "name": "Create and retain an incident without Operational Context",
+    "sanity": true,
+    "viewport": "desktop",
+    "covers": [
+      "authentication and workspace bootstrap",
+      "incident create and update",
+      "database persistence after reload",
+      "Impact Link and progress timeline",
+      "bulk progress log autoparse",
+      "Dispatch-Time date anchor and overnight rollover",
+      "autoparse date rebasing without changing manual updates",
+      "full-width incident editor",
+      "Operational Context removal",
+      "single progress update deletion with confirmation",
+      "bulk progress timeline deletion with confirmation",
+      "deleted progress state persists after reload",
+      "backend permits confirmed progress deletion while preserving timeline order",
+      "progress deletion version snapshot and audit trail",
+      "deep navy and cyan token-driven dark theme",
+      "consistent desktop navigation and command bar",
+      "dashboard KPI and incident-list visual hierarchy",
+      "incident editor and progress timeline visual consistency",
+      "readable light and dark theme contrast",
+      "Cut Points and GeoTag section visual hierarchy",
+      "CP count and marker-ready summary",
+      "one coordinate per CP",
+      "create CP and empty-coordinate state"
+    ],
+    "description": "Verifies a signed-in operator can create an incident, retain its edits after reload, and use the simplified full-width editor.",
+    "steps": [
+      "Open the app and sign in using an available provider.",
+      "Use the workspace theme control to switch to Light mode, verify the dashboard navigation and KPI cards remain readable, then switch back to Dark mode.",
+      "Create a new incident with a unique Incident ID and valid title.",
+      "Open Cut Points & GeoTag and verify the section shows 0 / 20 CP, a clear empty state, and the Tambah CP Pertama action.",
+      "Click Tambah CP Pertama and verify CP 01 appears with one empty coordinate slot and an Extract coordinate action.",
+      "Add an Impact Link and one manual progress update dated 2026-11-01 at 22:30.",
+      "Set Dispatch Time to 2026-11-01 23:55.",
+      "Paste three timestamped updates at 01:00, 02:00 and 00:38 into Progress Update Autoparse; verify the preview dates are 2026-11-02, 2026-11-02 and 2026-11-03.",
+      "Add the parsed updates, change Dispatch Time to 2026-11-02 23:55, and verify imported dates shift to 2026-11-03, 2026-11-03 and 2026-11-04 while the manual update stays on 2026-11-01.",
+      "Set Internal notes to 'NOC QA retention sentinel' and wait until the save state reads Saved.",
+      "Refresh the app and reopen the incident.",
+      "Verify the Impact Link, progress update and Internal notes are retained, and inspect the editor layout.",
+      "Delete the imported update dated 2026-11-03 at 01:00 using its row-level Hapus action and confirm the deletion.",
+      "Wait until the save indicator reads Saved, verify the remaining three progress updates stay visible and the deleted update is gone, then open Versions and verify the audit trail records one deleted progress update.",
+      "Click Hapus semua in Progress Timeline and confirm the bulk deletion.",
+      "Wait until the save indicator reads Saved, verify the timeline empty state, refresh, reopen the incident, confirm the timeline remains empty, and verify the bulk deletion is recorded in the audit trail."
+    ],
+    "expected": "The incident fields remain saved. With Dispatch Time at 23:55, the first update at 01:00 is dated the next day; later updates retain correct overnight rollover. Changing Dispatch Time rebases imported rows by their day offsets while preserving the manual update date. A confirmed row-level deletion removes only the selected update, and Hapus semua clears the remaining timeline. Both operations save successfully, create a recoverable pre-change version snapshot and an audit entry, preserve the relative order of retained updates, and remain effective after refresh. The editor uses the available form width and has no Operational Context rail, Context action, or empty secondary column. The dashboard, command bar, navigation, editor and timeline share a consistent deep-navy/cyan visual system, and both theme modes remain readable. The Cut Points & GeoTag section presents a visible CP count and marker-ready count; creating a CP produces one card with exactly one coordinate slot and a clear extraction action."
+  },
+  {
+    "name": "Preserve pending edits during logout",
+    "viewport": "desktop",
+    "covers": [
+      "autosave flush before sign-out",
+      "workspace-and-user-scoped local recovery",
+      "local recovery cleanup after successful logout"
+    ],
+    "description": "Verifies logout does not silently discard an edit that has not finished autosaving.",
+    "steps": [
+      "Sign in and open an existing incident, or create a new incident.",
+      "Change Internal notes to 'Logout persistence QA sentinel'.",
+      "While the editor indicates the edit is pending, immediately click Sign out.",
+      "Sign in again and reopen the same incident."
+    ],
+    "expected": "The edit is saved before logout and remains visible after signing in again. If the save cannot complete, logout is cancelled and the user remains in the workspace rather than losing the pending edit."
+  },
+  {
+    "name": "Smart Import remains usable on mobile",
+    "viewport": "mobile",
+    "covers": [
+      "responsive mobile editor navigation",
+      "bottom action dock clearance and final form-field accessibility",
+      "deterministic Smart Import parsing",
+      "reviewable incident draft",
+      "responsive mobile hamburger navigation",
+      "mobile dashboard and editor layout without horizontal overflow",
+      "touch-friendly mobile controls and timeline",
+      "responsive mobile Cut Points and GeoTag layout",
+      "mobile CP creation and empty-coordinate state"
+    ],
+    "description": "Verifies a standard NOC title can be parsed into a reviewable incident draft on a mobile viewport.",
+    "steps": [
+      "Sign in and open Smart Import.",
+      "Paste '[MANDAU][Open - Critical] DOWN - 110036_PEKALONGAN<>117001_SEMARANG - DWDM-INC-20260902-00013046'.",
+      "Review the parsed fields before confirming the import.",
+      "Open the hamburger navigation, switch to Ringkasan, then open the imported incident and inspect the editor and timeline at the mobile viewport.",
+      "Scroll to Cut Points & GeoTag, add the first CP, and verify its card and single coordinate action fit within the 375px viewport.",
+      "Scroll to the final editor section and verify the last input can be brought fully above the fixed bottom action dock before interacting with it."
+    ],
+    "expected": "Group, link identity and Incident ID are available for review and the mobile interface remains usable. The hamburger navigation remains usable, dashboard cards and editor controls fit the mobile viewport, and the timeline composer stacks without horizontal overflow. The Cut Points & GeoTag section and newly added CP card remain readable and usable without horizontal overflow. The bottom action dock remains clear of form content, and the final inputs can be scrolled fully into view."
+  },
+  {
+    "name": "Generate an Outlook-styled escalation draft from Dispatch Time",
+    "viewport": "desktop",
+    "covers": [
+      "Dispatch-Time-based escalation level",
+      "cumulative escalation TO and CC",
+      "Outlook-safe HTML email template",
+      "rich clipboard and unsent EML draft"
+    ],
+    "description": "Verifies an active incident past an escalation threshold produces the intended Outlook-style email from Dispatch Time.",
+    "steps": [
+      "Sign in and open an active incident whose Dispatch Time is beyond an escalation threshold.",
+      "Select the appropriate Regional Coordinator and review the escalation email preview.",
+      "Confirm the detail block uses a three-column table with grey labels, a colon column, bold values, Arial sizing and the NOC Mandau signature.",
+      "Use Copy styled email, Open Outlook + copy HTML, and Outlook draft (.eml)."
+    ],
+    "expected": "TO, CC and Subject match the active escalation level; spaces do not render as literal plus signs; rich clipboard content preserves the styled table; and the EML is an unsent HTML draft."
+  },
+  {
+    "name": "Block sharing an incomplete incident report",
+    "viewport": "desktop",
+    "covers": [
+      "required-field validation",
+      "report sharing guardrail",
+      "visible validation feedback"
+    ],
+    "description": "Verifies incomplete incident details are surfaced before a report can be shared.",
+    "steps": [
+      "Sign in and create a new standard incident.",
+      "Leave a required identity field such as Group or Link B empty.",
+      "Click Share in the incident editor."
+    ],
+    "expected": "A validation card identifies the fields that need attention and the incomplete report is not copied or shared."
+  }
+]

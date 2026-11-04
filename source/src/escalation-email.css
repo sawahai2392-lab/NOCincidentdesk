@@ -1,0 +1,378 @@
+.escalation-email-section {
+  --esc-accent: #16a085;
+  overflow: hidden;
+  padding-bottom: 14px;
+}
+
+.escalation-title {
+  align-items: center;
+  gap: 11px;
+  padding-bottom: 2px;
+}
+
+.escalation-title > span:first-child {
+  min-width: 38px;
+  font-size: 9px;
+  letter-spacing: .08em;
+}
+
+.escalation-live-badge {
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+  min-height: 34px;
+  padding: 0 11px;
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  background: var(--panel-raised, rgba(255,255,255,.04));
+  white-space: nowrap;
+}
+
+.escalation-live-badge.level-1 { --esc-accent: #12a95e; }
+.escalation-live-badge.level-2 { --esc-accent: #d7bd00; }
+.escalation-live-badge.level-3 { --esc-accent: #e89b0c; }
+.escalation-live-badge.level-4 { --esc-accent: #e24444; }
+.escalation-live-badge svg { color: var(--esc-accent); }
+
+.escalation-steps {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 9px;
+  margin: 14px 0;
+}
+
+.escalation-step {
+  display: grid;
+  grid-template-columns: auto auto minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 9px;
+  min-height: 54px;
+  padding: 9px 11px;
+  border: 1px solid var(--border);
+  border-radius: 13px;
+  background: var(--panel-raised, rgba(255,255,255,.035));
+  opacity: .64;
+}
+
+.escalation-step > span {
+  display: grid;
+  place-items: center;
+  width: 29px;
+  height: 29px;
+  border-radius: 9px;
+  background: rgba(127,127,127,.12);
+  font-size: 11px;
+  font-weight: 800;
+}
+
+.escalation-step strong { font-size: 13px; }
+.escalation-step small {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.escalation-step i {
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  background: var(--border);
+}
+.escalation-step.reached { opacity: 1; }
+.escalation-step.reached svg { color: var(--esc-accent); }
+.escalation-step.current {
+  border-color: color-mix(in srgb, var(--esc-accent) 42%, var(--border));
+  box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--esc-accent) 22%, transparent);
+}
+
+.escalation-grid {
+  display: grid;
+  grid-template-columns: minmax(320px, .78fr) minmax(460px, 1.22fr);
+  align-items: start;
+  gap: 14px;
+}
+
+.escalation-config,
+.escalation-preview {
+  min-width: 0;
+  border: 1px solid var(--border);
+  border-radius: 15px;
+  background: var(--panel-raised, rgba(255,255,255,.025));
+  box-shadow: 0 1px 0 rgba(255,255,255,.025) inset;
+}
+
+.escalation-config { padding: 14px; align-self: start; }
+.escalation-field { display: grid; gap: 6px; }
+.escalation-field > span { font-size: 12px; font-weight: 750; }
+.escalation-field em {
+  margin-left: 6px;
+  color: var(--esc-accent);
+  font-size: 10px;
+  font-style: normal;
+}
+.escalation-field select {
+  width: 100%;
+  min-height: 42px;
+  padding: 0 36px 0 11px;
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  background: var(--input-bg, var(--panel));
+  color: inherit;
+  font: inherit;
+}
+.escalation-field > small { opacity: .64; line-height: 1.45; }
+
+.escalation-recipient-card,
+.escalation-wait-card {
+  margin-top: 12px;
+  padding: 12px 13px;
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  background: color-mix(in srgb, var(--esc-accent) 5%, transparent);
+}
+.escalation-recipient-head,
+.escalation-wait-card {
+  display: flex;
+  align-items: center;
+  gap: 9px;
+}
+.escalation-recipient-head svg,
+.escalation-wait-card svg { color: var(--esc-accent); flex: none; }
+.escalation-recipient-head span { display: grid; }
+.escalation-recipient-head small { opacity: .62; }
+.escalation-recipient-card dl { display: grid; gap: 7px; margin: 11px 0 0; }
+.escalation-recipient-card dl > div {
+  display: grid;
+  grid-template-columns: 34px 1fr;
+  gap: 9px;
+  align-items: start;
+}
+.escalation-recipient-card dt {
+  padding-top: 2px;
+  font-size: 9px;
+  font-weight: 800;
+  letter-spacing: .12em;
+  opacity: .54;
+}
+.escalation-recipient-card dd { display: grid; gap: 2px; margin: 0; min-width: 0; }
+.escalation-recipient-card dd span { overflow: hidden; text-overflow: ellipsis; font-size: 11px; opacity: .72; }
+.escalation-wait-card p { margin: 3px 0 0; font-size: 11px; opacity: .68; }
+
+.escalation-cc-list { margin-top: 9px; }
+.escalation-cc-list summary {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  cursor: pointer;
+  font-size: 11px;
+  font-weight: 700;
+  opacity: .8;
+}
+.escalation-cc-list > div { display: flex; flex-wrap: wrap; gap: 5px; margin-top: 9px; }
+.escalation-cc-list code {
+  max-width: 100%;
+  padding: 5px 7px;
+  overflow: hidden;
+  border: 1px solid var(--border);
+  border-radius: 7px;
+  font-size: 10px;
+  text-overflow: ellipsis;
+}
+
+.escalation-actions {
+  display: grid;
+  grid-template-columns: minmax(0, .95fr) minmax(0, 1fr) minmax(0, 1.18fr);
+  gap: 8px;
+  margin-top: 13px;
+}
+.escalation-button {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 7px;
+  min-width: 0;
+  min-height: 44px;
+  padding: 0 10px;
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  color: inherit;
+  font: inherit;
+  font-size: 11px;
+  font-weight: 750;
+  line-height: 1.2;
+  white-space: nowrap;
+  cursor: pointer;
+}
+.escalation-button.secondary { background: transparent; }
+.escalation-button.primary {
+  border-color: color-mix(in srgb, var(--esc-accent) 58%, var(--border));
+  background: var(--esc-accent);
+  color: #fff;
+}
+.escalation-button:disabled { cursor: not-allowed; opacity: .45; }
+.escalation-warning { margin: 8px 0 0; color: #d58b16; font-size: 11px; }
+
+.escalation-preview {
+  overflow: hidden;
+  align-self: start;
+  background: var(--panel-raised, rgba(255,255,255,.025));
+}
+.escalation-preview-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  min-height: 44px;
+  padding: 10px 14px;
+  border-bottom: 1px solid var(--border);
+  background: color-mix(in srgb, var(--panel-raised, transparent) 92%, var(--esc-accent) 8%);
+}
+.escalation-preview-head span { display: flex; align-items: center; gap: 7px; font-size: 12px; font-weight: 750; }
+.escalation-preview-head b { color: var(--esc-accent); font-size: 10px; }
+.escalation-mail-body {
+  max-height: 500px;
+  overflow-y: auto;
+  overflow-x: hidden;
+  padding: 16px;
+  font-size: 11px;
+  line-height: 1.52;
+  scrollbar-gutter: stable;
+}
+.escalation-mail-body > small {
+  display: block;
+  margin-bottom: 5px;
+  font-size: 8px;
+  font-weight: 800;
+  letter-spacing: .14em;
+  opacity: .48;
+}
+.escalation-subject {
+  display: block;
+  margin-bottom: 14px;
+  padding: 0 0 12px;
+  border-bottom: 1px solid var(--border);
+  font-size: 10px;
+  line-height: 1.5;
+  font-weight: 750;
+  word-break: break-word;
+}
+.escalation-detail-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 7px; margin: 12px 0; }
+.escalation-detail-grid > span {
+  display: grid;
+  gap: 3px;
+  padding: 8px 9px;
+  border: 1px solid var(--border);
+  border-radius: 9px;
+  background: rgba(127,127,127,.035);
+  font-size: 9px;
+  opacity: .75;
+}
+.escalation-detail-grid > span.wide { grid-column: 1 / -1; }
+.escalation-detail-grid b { font-size: 10px; line-height: 1.45; opacity: 1; word-break: break-word; }
+.outlook-message-preview {
+  padding: 17px 18px 20px;
+  border: 1px solid #e5e7eb;
+  border-radius: 10px;
+  font-family: Arial, sans-serif;
+  font-size: 10.5pt;
+  line-height: 1.35;
+  color: #111;
+  background: #fff;
+  box-shadow: 0 1px 2px rgba(0,0,0,.035);
+}
+.outlook-message-preview > p { margin: 0 0 11pt; }
+.outlook-preview-scroll { max-width: 100%; overflow: hidden; margin: 2pt 0 12pt; }
+.outlook-detail-table {
+  width: 100%;
+  max-width: 100%;
+  margin: 0;
+  border-collapse: collapse;
+  table-layout: fixed;
+  font-family: Arial, sans-serif;
+  font-size: 10pt;
+  color: #111;
+}
+.outlook-detail-table tr { min-height: 24px; }
+.outlook-detail-table td { padding: 4px 7px; vertical-align: top; line-height: 1.32; word-break: break-word; }
+.outlook-detail-table td:first-child { width: 22%; background: #E7E6E6; white-space: normal; }
+.outlook-detail-table td:nth-child(2) { width: 3%; padding-left: 6px; padding-right: 2px; white-space: nowrap; }
+.outlook-detail-table td:nth-child(3) { width: 75%; }
+.outlook-signature { margin-top: 28pt; }
+.outlook-signature p { margin: 0 0 7pt; }
+.outlook-signature img { display: block; width: 342px; height: 99px; object-fit: contain; object-position: left center; margin: 0 0 6pt; }
+.outlook-signature p:last-child { font-size: 10pt; }
+.matoa-signature {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  margin-top: 16px;
+  padding-top: 13px;
+  border-top: 1px solid var(--border);
+}
+.matoa-signature img { width: 118px; height: auto; max-height: 52px; object-fit: contain; object-position: left center; }
+.matoa-signature span { font-size: 10px; line-height: 1.45; }
+.matoa-signature small { opacity: .66; }
+.escalation-preview-empty {
+  display: grid;
+  place-items: center;
+  align-content: center;
+  gap: 6px;
+  min-height: 250px;
+  padding: 20px;
+  text-align: center;
+  opacity: .62;
+}
+.escalation-preview-empty p { margin: 0; }
+.escalation-outlook-note {
+  margin: 12px 0 0;
+  padding: 9px 11px;
+  border: 1px solid color-mix(in srgb, var(--border) 80%, var(--esc-accent) 20%);
+  border-radius: 10px;
+  background: color-mix(in srgb, var(--esc-accent) 4%, transparent);
+  font-size: 9.5px;
+  line-height: 1.55;
+  opacity: .72;
+}
+.escalation-fallback { display: grid; gap: 4px; min-height: 64px; }
+.escalation-fallback span { font-size: 11px; opacity: .66; }
+
+@media (max-width: 1050px) {
+  .escalation-grid { grid-template-columns: 1fr; }
+  .escalation-config { width: 100%; }
+  .escalation-actions { grid-template-columns: 1fr 1fr; }
+  .escalation-actions .primary { grid-column: 1 / -1; }
+  .escalation-mail-body { max-height: 560px; }
+}
+
+@media (max-width: 720px) {
+  .escalation-title { align-items: flex-start; flex-wrap: wrap; }
+  .escalation-live-badge { min-height: 30px; padding: 0 9px; margin-left: auto; }
+  .escalation-steps { display: flex; overflow-x: auto; padding-bottom: 2px; scrollbar-width: none; }
+  .escalation-steps::-webkit-scrollbar { display: none; }
+  .escalation-step { flex: 0 0 168px; }
+  .escalation-config { padding: 12px; }
+  .escalation-actions { grid-template-columns: 1fr 1fr; }
+  .escalation-actions .primary { grid-column: 1 / -1; }
+  .escalation-button { font-size: 10.5px; white-space: normal; }
+  .escalation-mail-body { max-height: 520px; padding: 11px; }
+  .outlook-message-preview { padding: 14px 12px 16px; font-size: 10pt; }
+  .outlook-detail-table { font-size: 9.5pt; }
+  .outlook-detail-table td:first-child { width: 29%; }
+  .outlook-detail-table td:nth-child(2) { width: 5%; }
+  .outlook-detail-table td:nth-child(3) { width: 66%; }
+  .escalation-detail-grid { grid-template-columns: 1fr; }
+  .escalation-detail-grid > span.wide { grid-column: auto; }
+  .matoa-signature { align-items: flex-start; flex-direction: column; }
+  .matoa-signature img { width: 105px; }
+}
+
+@media (max-width: 430px) {
+  .escalation-actions { grid-template-columns: 1fr; }
+  .escalation-actions .primary { grid-column: auto; }
+  .escalation-button { min-height: 42px; }
+  .outlook-detail-table td { padding: 4px 5px; }
+  .outlook-detail-table td:first-child { width: 32%; }
+  .outlook-detail-table td:nth-child(2) { width: 5%; }
+  .outlook-detail-table td:nth-child(3) { width: 63%; }
+  .escalation-outlook-note { font-size: 9px; }
+}

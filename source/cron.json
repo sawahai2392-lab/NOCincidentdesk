@@ -1,0 +1,12 @@
+[
+  {
+    "name": "sla-update-reminder",
+    "cron": "*/15 * * * *",
+    "handler": "slaReminderHandler",
+    "timezone": "Asia/Jakarta",
+    "payload": {
+      "purpose": "notify overdue active incidents",
+      "schemaVersion": 1
+    }
+  }
+]
