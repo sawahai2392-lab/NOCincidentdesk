@@ -2,14 +2,14 @@ import {
   collection,
   doc,
   documentId,
-  getDoc,
-  getDocs,
+  getDoc as firestoreGetDoc,
+  getDocs as firestoreGetDocs,
   limit,
   onSnapshot,
   orderBy,
   query,
-  runTransaction,
-  setDoc,
+  runTransaction as firestoreRunTransaction,
+  setDoc as firestoreSetDoc,
   startAfter,
   writeBatch,
   Timestamp,
@@ -19,6 +19,7 @@ import {
 } from 'firebase/firestore';
 import type { User } from 'firebase/auth';
 import { firestore } from './firebase';
+import { recordBatchWrite, recordDirectWrite, recordDocumentRead, recordListenerSnapshot, recordListenerStart, recordListenerStop, recordQueryRead, recordTransaction } from '../firestore-usage';
 import { decodeIncidentPageCursor, encodeIncidentPageCursor } from '../incident-pagination';
 import { isFirestoreIncidentPayloadSafe, measureFirestoreDocumentBytes, MAX_FIRESTORE_INCIDENT_DOCUMENT_BYTES } from '../firestore-payload';
 import {
@@ -34,6 +35,37 @@ import {
   type Role,
   type SettingsData,
 } from '../domain';
+
+
+// Preserve the SDK overloads at call sites while delegating through Reflect.apply.
+// Parameters<> collapses Firebase's overloads and loses the snapshot generics.
+const getDoc = ((...args: any[]) => {
+  const pending = Reflect.apply(firestoreGetDoc, undefined, args);
+  return pending.then((snapshot: Awaited<typeof pending>) => {
+    recordDocumentRead();
+    return snapshot;
+  });
+}) as typeof firestoreGetDoc;
+
+const getDocs = ((...args: any[]) => {
+  const pending = Reflect.apply(firestoreGetDocs, undefined, args);
+  return pending.then((snapshot: Awaited<typeof pending>) => {
+    recordQueryRead(snapshot.size);
+    return snapshot;
+  });
+}) as typeof firestoreGetDocs;
+
+const setDoc = ((...args: any[]) => {
+  const pending = Reflect.apply(firestoreSetDoc, undefined, args);
+  return pending.then(() => {
+    recordDirectWrite();
+  });
+}) as typeof firestoreSetDoc;
+
+const runTransaction = ((...args: any[]) => {
+  recordTransaction();
+  return Reflect.apply(firestoreRunTransaction, undefined, args);
+}) as typeof firestoreRunTransaction;
 
 const now = () => Date.now();
 const workspacePath = (workspaceId: string) => 'workspaces/' + workspaceId;
@@ -832,6 +864,7 @@ export async function commitRouteMasterImport(
     updatedBy: user.uid,
     updatedByName: user.displayName || user.email || '',
   });
+  recordBatchWrite(2);
   await batch.commit();
 }
 
@@ -988,7 +1021,9 @@ export function subscribeToWorkspace(
 ): Unsubscribe {
   const unsubscribers: Unsubscribe[] = [];
   const incidentQuery = query(collection(firestore, incidentsPath(workspaceId)), orderBy('updatedAt', 'desc'), limit(100));
+  recordListenerStart();
   unsubscribers.push(onSnapshot(incidentQuery, (snapshot) => {
+    recordListenerSnapshot(snapshot.size);
     snapshot.docChanges().forEach((change) => {
       const incident = normalizeIncidentSnapshot(change.doc.data(), change.doc.id);
       if (change.type === 'removed') {
@@ -1002,13 +1037,17 @@ export function subscribeToWorkspace(
       onIncident('incident.saved', incident);
     });
   }));
+  recordListenerStart();
   unsubscribers.push(onSnapshot(doc(firestore, settingsPath(workspaceId)), (snapshot) => {
+    recordListenerSnapshot(snapshot.exists() ? 1 : 0);
     if (snapshot.exists()) onSettings({ ...defaultSettings, ...snapshot.data() } as SettingsData);
   }));
-  unsubscribers.push(onSnapshot(query(collection(firestore, membersPath(workspaceId)), limit(100)), () => {
+  recordListenerStart();
+  unsubscribers.push(onSnapshot(query(collection(firestore, membersPath(workspaceId)), limit(100)), (snapshot) => {
+    recordListenerSnapshot(snapshot.size);
     onMembersChanged();
   }));
-  return () => unsubscribers.forEach((unsubscribe) => unsubscribe());
+  return () => unsubscribers.forEach((unsubscribe) => { unsubscribe(); recordListenerStop(); });
 }
 
 export async function searchIncidents(workspaceId: string, term: string): Promise<Incident[]> {

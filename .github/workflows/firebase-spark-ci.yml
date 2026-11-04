@@ -6,6 +6,7 @@ on:
       - 'fix/phase5-*'
       - 'fix/phase6-*'
       - 'fix/phase7-*'
+      - 'fix/phase8-*'
   pull_request:
     branches:
       - feat/tt-editor-quick-updates
@@ -17,6 +18,7 @@ on:
       - 'fix/phase5-*'
       - 'fix/phase6-*'
       - 'fix/phase7-*'
+      - 'fix/phase8-*'
   workflow_dispatch:
 
 permissions:
@@ -75,3 +77,7 @@ jobs:
       - name: Stable incident pagination tests
         working-directory: source
         run: npm run test:pagination
+
+      - name: Firestore usage observability tests
+        working-directory: source
+        run: npm run test:usage
