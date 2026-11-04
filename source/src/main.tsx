@@ -33,6 +33,7 @@ import './progress-autoparse.css';
 import './enterprise-overhaul.css';
 import './cutpoint-polish.css';
 import './responsive-viewport-fix.css';
+import './sidebar-command-center.css';
 
 createRoot(document.getElementById('root')!).render(
     <StrictMode>
