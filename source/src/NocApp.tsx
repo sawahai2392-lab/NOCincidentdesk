@@ -248,7 +248,35 @@ function App() {
         connection.onMessage(message => {
             if (message?.type !== 'entity.update' || message.payload?.entity_type !== 'workspace' || message.payload?.entity_id !== workspaceId) return;
             const payload = message.payload.data as { kind?: string; incident?: Incident; id?: string; settings?: SettingsData; member?: BootstrapData['members'][number] };
-            if (payload.kind === 'incident.saved' && payload.incident) { const incoming = payload.incident; upsertIncident(incoming); setOpsSignal(value => value + 1); setDraft(current => { if (current?.id !== incoming.id) return current; const dirty = JSON.stringify(current) !== lastSavedRef.current; if (dirty && incoming.revision > current.revision) { setRemoteConflict(clone(incoming)); return current; } lastSavedRef.current = JSON.stringify(incoming); clearIncidentRecovery(data?.profile.workspaceId, data?.profile.userId, incoming.id); return clone(incoming); }); }
+            if (payload.kind === 'incident.saved' && payload.incident) {
+                const incoming = payload.incident;
+                setData(current => {
+                    if (!current) return current;
+                    const existing = current.incidents.find(item => item.id === incoming.id);
+                    if (existing && existing.revision > incoming.revision) return current;
+                    return { ...current, incidents: existing
+                        ? current.incidents.map(item => item.id === incoming.id ? incoming : item)
+                        : [incoming, ...current.incidents] };
+                });
+                setOpsSignal(value => value + 1);
+                setDraft(current => {
+                    if (current?.id !== incoming.id || saveInFlightRef.current) return current;
+                    const dirty = JSON.stringify(current) !== lastSavedRef.current;
+                    if (dirty) {
+                        const baseline = lastSavedRef.current ? JSON.parse(lastSavedRef.current) as Incident : null;
+                        const changedRemotely = incoming.revision > current.revision
+                            || (baseline && JSON.stringify(incoming) !== JSON.stringify(baseline));
+                        if (changedRemotely && incoming.revision >= current.revision) {
+                            setRemoteConflict(existing => !existing || existing.revision < incoming.revision ? clone(incoming) : existing);
+                        }
+                        return current;
+                    }
+                    if (incoming.revision < current.revision) return current;
+                    lastSavedRef.current = JSON.stringify(incoming);
+                    clearIncidentRecovery(data?.profile.workspaceId, data?.profile.userId, incoming.id);
+                    return clone(incoming);
+                });
+            }
             if (payload.kind === 'incident.deleted' && payload.id) { setData(current => current ? { ...current, incidents: current.incidents.filter(item => item.id !== payload.id) } : current); setDraft(current => current?.id === payload.id ? null : current); setOpsSignal(value => value + 1); }
             if (payload.kind === 'ops.alerts_changed') { setOpsSignal(value => value + 1); void loadOpsUnread(); }
             if (payload.kind === 'settings.saved' && payload.settings) { const incomingSettings = payload.settings; setData(current => current ? { ...current, settings: incomingSettings } : current); setSettingsDraft(clone(incomingSettings)); setOpsSignal(value => value + 1); }
@@ -260,7 +288,7 @@ function App() {
         return () => { if (connection.connectionId) void api.post('/api/subscriptions/remove', { entity_type: 'workspace', entity_id: workspaceId, connection_id: connection.connectionId }); connection.disconnect(); socketRef.current = null; };
     }, [data?.profile.workspaceId]);
     useEffect(() => { if (!draft || !data) return; const serialized = JSON.stringify(draft); if (serialized === lastSavedRef.current) return; setSaveState('pending'); if (saveTimerRef.current) window.clearTimeout(saveTimerRef.current); saveTimerRef.current = window.setTimeout(() => void persistDraft(draft), 900); return () => { if (saveTimerRef.current) window.clearTimeout(saveTimerRef.current); }; }, [draft]);
-    useEffect(() => { const handleOnline = () => { setOnline(true); if (draft && JSON.stringify(draft) !== lastSavedRef.current) void persistDraft(draft); }; const handleOffline = () => setOnline(false); const refreshClock = () => setClock(Date.now()); window.addEventListener('online', handleOnline); window.addEventListener('offline', handleOffline); document.addEventListener('visibilitychange', refreshClock); const timer = window.setInterval(refreshClock, 60000); return () => { window.removeEventListener('online', handleOnline); window.removeEventListener('offline', handleOffline); document.removeEventListener('visibilitychange', refreshClock); window.clearInterval(timer); }; }, [draft]);
+    useEffect(() => { const handleOnline = () => { setOnline(true); const latest = draftRef.current; if (latest && JSON.stringify(latest) !== lastSavedRef.current && remoteConflict?.id !== latest.id) void persistDraft(latest); }; const handleOffline = () => setOnline(false); const refreshClock = () => setClock(Date.now()); window.addEventListener('online', handleOnline); window.addEventListener('offline', handleOffline); document.addEventListener('visibilitychange', refreshClock); const timer = window.setInterval(refreshClock, 60000); return () => { window.removeEventListener('online', handleOnline); window.removeEventListener('offline', handleOffline); document.removeEventListener('visibilitychange', refreshClock); window.clearInterval(timer); }; }, [remoteConflict?.id]);
     useEffect(() => { if (!draft || !data) return; const serialized = JSON.stringify(draft); if (serialized === lastSavedRef.current) return; storeIncidentRecovery(draft, data.profile.workspaceId, data.profile.userId); }, [draft, data?.profile.workspaceId, data?.profile.userId]);
     useEffect(() => { const blockExit = (event: BeforeUnloadEvent) => { if (saveState === 'pending' || saveState === 'saving' || saveState === 'error') { event.preventDefault(); event.returnValue = ''; } }; window.addEventListener('beforeunload', blockExit); return () => window.removeEventListener('beforeunload', blockExit); }, [saveState]);
     async function completeAuthentication(nextUser: User) {
@@ -364,6 +392,7 @@ function App() {
     }
     async function joinWorkspace() { if (!inviteCode || joinBusy) return; setJoinBusy(true); setJoinError(''); try { await api.post(`/api/invites/${inviteCode}/join`); invitesClient.clearPendingCode(); setInviteCode(null); setInviteInfo(null); await loadWorkspace(); notify('Berhasil bergabung ke workspace NOC.', 'success'); } catch (err) { setJoinError(errorMessage(err)); } finally { setJoinBusy(false); } }
     async function persistDraft(incident: Incident): Promise<boolean> {
+        if (remoteConflict?.id === incident.id) return false;
         if (!navigator.onLine) { setSaveState('pending'); return false; }
 
         // Autosave, reconnect, logout, and incident switching can request a save
@@ -435,7 +464,27 @@ function App() {
     async function createIncident(seed?: Partial<Incident>) { if (!user) return null; try { const payload = { ...emptyIncident(user.name || user.email || ''), ...seed }; const response = await api.post('/api/incidents', payload); const created = response.data.incident as Incident; upsertIncident(created); openIncident(created); notify('Draft incident baru dibuat.', 'success'); return created; } catch (err) { notify(errorMessage(err), 'error'); return null; } }
     function pinRunningIncident(id: string) { setRunningIds(current => current.includes(id) ? current : [...current, id]); }
     function removeRunningIncident(id: string) { setRunningIds(current => current.filter(item => item !== id)); }
-    function openIncident(incident: Incident) { if (incident.status === 'Open' || incident.status === 'Monitoring') pinRunningIncident(incident.id); const serverCopy = clone(incident); const recovered = readIncidentRecovery(serverCopy, data.profile.workspaceId, data.profile.userId); const copied = recovered || serverCopy; if (recovered) notify('Draft lokal yang belum terkirim berhasil dipulihkan.', 'info'); setDraft(copied); lastSavedRef.current = JSON.stringify(serverCopy); setRemoteConflict(null); const latest = [...copied.progress].sort((a, b) => ((b.date || '') + 'T' + (b.time || '')).localeCompare((a.date || '') + 'T' + (a.time || '')))[0]; setTimelineInput({ date: latest?.date || copied.occurTime.slice(0, 10) || localDate(), time: localTime(), text: '', pic: copied.picName, milestone: '' }); setEditingProgressId(''); setProgressEditDraft({ date: '', time: '', text: '', pic: '', milestone: '' }); setSaveState(JSON.stringify(copied) === JSON.stringify(serverCopy) ? 'saved' : 'pending'); setView('editor'); setMobilePreview(false); setHistoryOpen(false); }
+    function openIncident(incident: Incident) {
+        if (incident.status === 'Open' || incident.status === 'Monitoring') pinRunningIncident(incident.id);
+        const serverCopy = clone(incident);
+        const recovered = readIncidentRecovery(serverCopy, data.profile.workspaceId, data.profile.userId);
+        const copied = recovered || serverCopy;
+        if (recovered) {
+            notify('Draft lokal yang belum terkirim berhasil dipulihkan.', 'info');
+            if (recovered.revision !== serverCopy.revision) {
+                setRemoteConflict(serverCopy);
+                notify('Draft lokal berasal dari revisi lama. Pilih versi server atau duplikasi draft lokal sebelum melanjutkan.', 'error');
+            } else setRemoteConflict(null);
+        } else setRemoteConflict(null);
+        setDraft(copied);
+        lastSavedRef.current = JSON.stringify(serverCopy);
+        const latest = [...copied.progress].sort((a, b) => ((b.date || '') + 'T' + (b.time || '')).localeCompare((a.date || '') + 'T' + (a.time || '')))[0];
+        setTimelineInput({ date: latest?.date || copied.occurTime.slice(0, 10) || localDate(), time: localTime(), text: '', pic: copied.picName, milestone: '' });
+        setEditingProgressId('');
+        setProgressEditDraft({ date: '', time: '', text: '', pic: '', milestone: '' });
+        setSaveState(JSON.stringify(copied) === JSON.stringify(serverCopy) ? 'saved' : 'pending');
+        setView('editor'); setMobilePreview(false); setHistoryOpen(false);
+    }
     async function switchIncident(incident: Incident) { if (draft?.id === incident.id) { pinRunningIncident(incident.id); setView('editor'); setRunningSwitcherOpen(false); return true; } if (draft && JSON.stringify(draft) !== lastSavedRef.current) { if (saveTimerRef.current) { window.clearTimeout(saveTimerRef.current); saveTimerRef.current = null; } const saved = await persistDraft(draft); if (!saved) { notify(navigator.onLine ? 'TT saat ini belum berhasil disimpan. Pindah incident dibatalkan.' : 'Simpan TT saat ini dulu setelah koneksi kembali sebelum pindah incident.', 'error'); return false; } } openIncident(incident); setRunningSwitcherOpen(false); return true; }
     async function quickUpdateIncident(incidentId: string, value: string, picValue: string, milestoneValue = '') { const clean = value.trim(); if (!clean || !data) return false; const source = draft?.id === incidentId ? clone(draft) : clone(data.incidents.find(item => item.id === incidentId)); if (!source || source.deletedAt || (source.status !== 'Open' && source.status !== 'Monitoring')) { notify('TT ini sudah tidak aktif.', 'error'); return false; } if (!navigator.onLine) { notify('Quick Update membutuhkan koneksi agar update langsung aman tersimpan.', 'error'); return false; } const progressItem = { id: newId(), date: localDate(), time: localTime(), text: clean, pic: picValue.trim() || source.picName || '', milestone: milestoneValue.trim() }; const ticket = clean.match(/MDU-\d{8}-\d+/i); const buildNext = (base: Incident) => ({ ...base, progress: [...base.progress, progressItem], mduTicket: ticket && !base.mduTicket ? ticket[0] : base.mduTicket }); if (draft?.id === incidentId && saveTimerRef.current) { window.clearTimeout(saveTimerRef.current); saveTimerRef.current = null; } try { let response; try { response = await api.put(`/api/incidents/${incidentId}`, buildNext(source)); } catch (err) { const conflict = (err as { response?: { data?: { error?: string; current?: Incident } } }).response?.data; if (draft?.id !== incidentId && conflict?.error === 'revision_conflict' && conflict.current) response = await api.put(`/api/incidents/${incidentId}`, buildNext(conflict.current)); else throw err; } const saved = response.data.incident as Incident; upsertIncident(saved); pinRunningIncident(saved.id); if (draft?.id === saved.id) { lastSavedRef.current = JSON.stringify(saved); clearIncidentRecovery(data?.profile.workspaceId, data?.profile.userId, saved.id); setDraft(clone(saved)); setRemoteConflict(null); setSaveState('saved'); setTimelineInput(current => ({ ...current, time: localTime(), text: '', pic: saved.picName || current.pic })); } notify('Quick Update tersimpan.', 'success'); return true; } catch (err) { notify(errorMessage(err), 'error'); return false; } }
     const updateDraft = (patch: Partial<Incident>) => setDraft(current => { if (!current) return current; const next = { ...current, ...patch }; if (typeof patch.dispatchTime === 'string' && patch.dispatchTime !== current.dispatchTime) { const dispatchDate = patch.dispatchTime.slice(0, 10); if (/^\d{4}-\d{2}-\d{2}$/.test(dispatchDate)) { next.progress = next.progress.map(item => { if (!item.autoparseBatchId || typeof item.autoparseDayOffset !== 'number') return item; const date = shiftIsoDate(dispatchDate, item.autoparseDayOffset); return date ? { ...item, date } : item; }); } } return next; });
