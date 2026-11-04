@@ -24,7 +24,8 @@
     "test:restore-plan": "node --test tests/workspace-restore-plan.test.mjs",
     "test:route-integrity": "node --test tests/route-master-integrity.test.mjs",
     "test:restore-execution": "node --test tests/workspace-restore-execution.test.mjs",
-    "test:restore-recovery": "node --test tests/workspace-restore-recovery.test.mjs"
+    "test:restore-recovery": "node --test tests/workspace-restore-recovery.test.mjs",
+    "test:integrity": "node --test tests/workspace-integrity.test.mjs"
   },
   "dependencies": {
     "@floating-ui/react": "^0.27.16",
