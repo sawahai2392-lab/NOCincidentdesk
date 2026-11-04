@@ -663,7 +663,9 @@ export async function createVersion(
     const version: IncidentVersion = {
       id: versionRef.id,
       label: label.slice(0, 180),
-      incident,
+      // Store the exact persisted document shape so Security Rules can verify
+      // the snapshot matches the incident read in this transaction.
+      incident: { ...incidentSnapshot.data(), id: incidentSnapshot.id } as Incident,
       revision: incident.revision,
       auditId,
       createdAt,
