@@ -2,7 +2,7 @@
 
 **Status:** Architecture baseline  
 **Decision date:** 2026-11-04  
-**Branch:** \`feat/standalone-platform-migration\`
+**Branch:** `feat/standalone-platform-migration`
 
 ## 1. Goal
 
@@ -60,7 +60,7 @@ No database query, authorization decision, AI key, or file-system path may be ex
 
 The migration is incremental. Existing UI components and CSS are retained initially; files move only when imports and tests can be updated safely.
 
-\`\`\`text
+```text
 source/
   apps/
     web/                     # React/Vite dashboard
@@ -79,22 +79,22 @@ source/
     architecture/
   .env.example
   package.json                # npm workspaces; lockfile committed
-\`\`\`
+```
 
-A compatibility facade may temporarily preserve the current UI's \`api\`, \`auth\`, \`image\`, \`invitesClient\`, \`notifications\`, and \`ws\` interface while implementations are replaced. It must be local source code and must not resolve to an AppDeploy package.
+A compatibility facade may temporarily preserve the current UI's `api`, `auth`, `image`, `invitesClient`, `notifications`, and `ws` interface while implementations are replaced. It must be local source code and must not resolve to an AppDeploy package.
 
 ## 5. Domain and data model
 
-PostgreSQL becomes the sole source of truth. Every tenant-owned row carries a non-null \`workspace_id\`; all repository methods require a workspace context. The API must verify both membership and role for every protected action.
+PostgreSQL becomes the sole source of truth. Every tenant-owned row carries a non-null `workspace_id`; all repository methods require a workspace context. The API must verify both membership and role for every protected action.
 
 Core tables:
-- Identity: Better Auth \`user\`, \`account\`, \`session\`, \`verification\`.
-- Workspace: \`workspaces\`, \`workspace_members\`, \`workspace_invitations\`, \`workspace_settings\`.
-- Incident: \`incidents\`, \`incident_versions\`, \`incident_audit_logs\`, \`incident_attachments\`.
-- Operational details: \`incident_impacts\`, \`incident_progress\`, \`incident_cut_points\`, \`incident_geo_coordinates\`.
-- Master data: \`route_master_imports\`, \`route_master_items\`.
-- Notifications: \`notifications\`, \`push_subscriptions\`.
-- Operational processing: \`job_runs\` / queue tables managed by the PostgreSQL-backed job runner.
+- Identity: Better Auth `user`, `account`, `session`, `verification`.
+- Workspace: `workspaces`, `workspace_members`, `workspace_invitations`, `workspace_settings`.
+- Incident: `incidents`, `incident_versions`, `incident_audit_logs`, `incident_attachments`.
+- Operational details: `incident_impacts`, `incident_progress`, `incident_cut_points`, `incident_geo_coordinates`.
+- Master data: `route_master_imports`, `route_master_items`.
+- Notifications: `notifications`, `push_subscriptions`.
+- Operational processing: `job_runs` / queue tables managed by the PostgreSQL-backed job runner.
 
 Important integrity rules:
 - Unique incident ID is enforced per workspace for active/non-trashed incidents using a database constraint/index, not only a preflight query.
@@ -108,9 +108,9 @@ Important integrity rules:
 ## 6. Runtime boundaries
 
 ### HTTP and sessions
-- Same-origin deployment: browser and API share the app origin; API is under \`/api/v1\`, Better Auth under \`/api/auth\`.
-- Better Auth uses database-backed, HttpOnly, Secure-in-production cookies. Browser requests use \`credentials: "include"\`; no long-lived bearer token is placed in localStorage.
-- OAuth credentials and all provider keys are environment secrets. Local use is supported with \`.env\`; production uses the host's secret store.
+- Same-origin deployment: browser and API share the app origin; API is under `/api/v1`, Better Auth under `/api/auth`.
+- Better Auth uses database-backed, HttpOnly, Secure-in-production cookies. Browser requests use `credentials: "include"`; no long-lived bearer token is placed in localStorage.
+- OAuth credentials and all provider keys are environment secrets. Local use is supported with `.env`; production uses the host's secret store.
 - CORS is allowlist-only if a separate web origin is ever introduced.
 
 ### Realtime
@@ -122,7 +122,7 @@ Important integrity rules:
 
 ### Storage
 - Development: local persistent volume, generated opaque object keys, file size/type allowlists.
-- Production: S3-compatible object API behind the same \`StorageService\` interface.
+- Production: S3-compatible object API behind the same `StorageService` interface.
 - Download URLs are short-lived and generated only after an authorization check.
 - No public bucket or permanent public attachment URL by default.
 
@@ -140,7 +140,7 @@ Important integrity rules:
 
 ## 7. Security and quality requirements
 
-- TypeScript strict mode; no \`any\` for new domain/API code.
+- TypeScript strict mode; no `any` for new domain/API code.
 - Zod validation for all request bodies, query parameters, and environment variables.
 - Password/OAuth/session management delegated to Better Auth; authorization remains in domain services.
 - Workspace scoping enforced in server repositories; avoid raw tenant IDs from request bodies.
