@@ -2,8 +2,10 @@ import { createHash, createHmac, randomBytes, randomUUID, timingSafeEqual } from
 import { mkdir, readFile, rm, writeFile } from "node:fs/promises";
 import { basename, dirname, extname, isAbsolute, relative, resolve, sep } from "node:path";
 import { GoogleGenAI } from "@google/genai";
+import webpush from "web-push";
 import { Hono } from "hono";
 import { env } from "./env.js";
+import { auth } from "./auth.js";
 import { pool } from "./db/client.js";
 import { sendRealtime } from "./realtime.js";
 
@@ -409,6 +411,51 @@ export const notifications = {
         `insert into user_notifications (user_id, title, body, payload)
          values ($1, $2, $3, $4::jsonb)`,
         [row.userId, row.title, row.body, row.payload]
+      );
+    }
+
+    if (env.VAPID_PUBLIC_KEY && env.VAPID_PRIVATE_KEY) {
+      webpush.setVapidDetails(
+        env.VAPID_SUBJECT,
+        env.VAPID_PUBLIC_KEY,
+        env.VAPID_PRIVATE_KEY
+      );
+      const subscriptions = await pool.query<{
+        subscription: Record<string, unknown>;
+      }>(
+        `select subscription
+           from web_push_subscriptions
+          where user_id = any($1::text[])`,
+        [input.userIds]
+      );
+      const payload = JSON.stringify({
+        title: input.notification.title,
+        body: input.notification.body,
+        data: input.data || {}
+      });
+      await Promise.allSettled(
+        subscriptions.rows.map(async (row) => {
+          try {
+            await webpush.sendNotification(
+              row.subscription as webpush.PushSubscription,
+              payload,
+              { TTL: input.ttlSeconds || 3600 }
+            );
+          } catch (cause) {
+            const statusCode = (cause as { statusCode?: number }).statusCode;
+            if (statusCode === 404 || statusCode === 410) {
+              const endpoint = String(row.subscription.endpoint || "");
+              if (endpoint) {
+                await pool.query(
+                  "delete from web_push_subscriptions where endpoint = $1",
+                  [endpoint]
+                );
+              }
+            } else {
+              throw cause;
+            }
+          }
+        })
       );
     }
   }
