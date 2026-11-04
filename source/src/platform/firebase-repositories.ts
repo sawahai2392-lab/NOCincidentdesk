@@ -14,7 +14,9 @@ import {
   writeBatch,
   Timestamp,
   type DocumentData,
+  type Query,
   type QueryDocumentSnapshot,
+  type QuerySnapshot,
   type Unsubscribe,
 } from 'firebase/firestore';
 import type { User } from 'firebase/auth';
@@ -823,11 +825,11 @@ export async function exportWorkspaceBackup(workspaceId: string, user: User): Pr
     let cursor: QueryDocumentSnapshot<DocumentData> | null = null;
     while (true) {
       const reference = collection(firestore, path);
-      const pageQuery = cursor
+      const pageQuery: Query<DocumentData> = cursor
         ? query(reference, orderBy(documentId()), startAfter(cursor), limit(400))
         : query(reference, orderBy(documentId()), limit(400));
-      const snapshot = await getDocs(pageQuery);
-      rows.push(...snapshot.docs.map((item) => ({ ...item.data(), id: item.id })));
+      const snapshot: QuerySnapshot<DocumentData> = await getDocs(pageQuery);
+      rows.push(...snapshot.docs.map((item: QueryDocumentSnapshot<DocumentData>) => ({ ...item.data(), id: item.id })));
       if (snapshot.size < 400) break;
       cursor = snapshot.docs[snapshot.docs.length - 1];
     }
