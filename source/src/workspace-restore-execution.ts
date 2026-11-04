@@ -73,7 +73,7 @@ export interface WorkspaceRestoreActiveRouteMaster {
 }
 
 export interface WorkspaceRestoreExecutionDependencies {
-  saveSettings(settings: WorkspaceRestoreSettings): Promise<unknown>;
+  saveSettings(settings: WorkspaceRestoreSettings, expectedUpdatedAt: number): Promise<{ updatedAt: number }>;
   startRouteMasterImport(): Promise<string>;
   addRouteMasterChunk(batchId: string, chunkIndex: number, items: RouteMasterPairValue[]): Promise<void>;
   verifyStagedRouteMaster(batchId: string, expectedCount: number, expectedFingerprint: string): Promise<{ verifiedCount: number }>;
@@ -187,6 +187,14 @@ export async function executeSelectiveWorkspaceRestore(
   }
 
   const completedSections: WorkspaceRestoreExecutionResult['completedSections'] = [];
+  let expectedCurrentBatchId: string | null = null;
+  if (input.selection.routeMaster) {
+    const currentActive = await dependencies.readActiveRouteMaster();
+    expectedCurrentBatchId = typeof currentActive.meta?.currentBatchId === 'string'
+      ? currentActive.meta.currentBatchId
+      : null;
+  }
+  let settingsUpdatedAtAfterApply: number | null = null;
   const warnings = [
     'Members, incidents, audit trail, dan version history tidak disentuh.',
     'Batch Route Master sebelumnya dipertahankan; batch aktif hanya berganti setelah staging dan verifikasi berhasil.',
@@ -221,7 +229,11 @@ export async function executeSelectiveWorkspaceRestore(
 
     if (input.selection.settings && settings) {
       emit(dependencies, 'applying-settings', 0, 1, 'Mengganti Workspace Settings sesuai backup.');
-      await dependencies.saveSettings(settings);
+      const savedSettings = await dependencies.saveSettings(
+        settings,
+        Number(input.currentSettings.updatedAt) || 0,
+      );
+      settingsUpdatedAtAfterApply = savedSettings.updatedAt;
       settingsApplied = true;
       emit(dependencies, 'applying-settings', 1, 1, 'Workspace Settings berhasil ditulis.');
     }
@@ -230,6 +242,7 @@ export async function executeSelectiveWorkspaceRestore(
       emit(dependencies, 'committing-route-master', 0, 1, 'Mengalihkan pointer ke batch Route Master baru.');
       const metadata = {
         totalCount: routeMaster.length,
+        expectedCurrentBatchId,
         fileName: `Backup restore · ${(input.sourceFileName || 'workspace backup').slice(0, 180)}`,
         sheetName: 'Route Master backup',
         systemKeyColumn: 'systemKey',
@@ -292,7 +305,10 @@ export async function executeSelectiveWorkspaceRestore(
     if (settingsApplied && input.selection.routeMaster && !routeMasterCommitted && !routeMasterCommitAcknowledged && previousSettings) {
       emit(dependencies, 'rolling-back-settings', 0, 1, 'Commit Route Master gagal; mengembalikan Workspace Settings sebelumnya.');
       try {
-        await dependencies.saveSettings(previousSettings);
+        if (settingsUpdatedAtAfterApply === null) {
+          throw new Error('Versi hasil penulisan Settings tidak tersedia untuk rollback bersyarat.');
+        }
+        await dependencies.saveSettings(previousSettings, settingsUpdatedAtAfterApply);
         emit(dependencies, 'rolling-back-settings', 1, 1, 'Workspace Settings sebelumnya berhasil dikembalikan.');
         return failure(
           [message],
