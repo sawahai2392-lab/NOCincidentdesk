@@ -1,6 +1,10 @@
 name: Firebase Spark CI
 
 on:
+  push:
+    branches:
+      - 'fix/phase5-*'
+      - 'fix/phase6-*'
   pull_request:
     branches:
       - feat/tt-editor-quick-updates
