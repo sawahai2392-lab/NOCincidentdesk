@@ -11,6 +11,9 @@ on:
       - 'feat/phase10-*'
       - 'feat/phase11-*'
       - 'feat/phase12-*'
+      - 'feat/phase13-*'
+      - 'feat/phase12-*'
+      - 'feat/phase13-*'
   pull_request:
     branches:
       - feat/tt-editor-quick-updates
@@ -100,4 +103,8 @@ jobs:
       - name: Workspace restore policy tests
         working-directory: source
         run: npm run test:restore-policy
+
+      - name: Selective workspace restore planner tests
+        working-directory: source
+        run: npm run test:restore-plan
 
