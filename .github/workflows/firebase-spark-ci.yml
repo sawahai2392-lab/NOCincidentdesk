@@ -9,6 +9,8 @@ on:
       - 'fix/phase2-*'
       - 'fix/phase3-*'
       - 'fix/phase4-*'
+      - 'fix/phase5-*'
+      - 'fix/phase6-*'
   workflow_dispatch:
 
 permissions:
