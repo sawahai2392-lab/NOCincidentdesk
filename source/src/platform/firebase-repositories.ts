@@ -205,6 +205,99 @@ function changedFields(before: Incident | null, after: Incident): string[] {
   );
 }
 
+type IncidentRole = Role;
+
+function progressIds(value: unknown): string[] {
+  return Array.isArray(value)
+    ? value.map((row) => String((row as { id?: unknown })?.id || '').trim())
+    : [];
+}
+
+function progressHistoryChangeIsValid(beforeValue: unknown, afterValue: unknown): boolean {
+  const beforeIds = progressIds(beforeValue);
+  const afterIds = progressIds(afterValue);
+  if (beforeIds.some((id) => !id) || new Set(beforeIds).size !== beforeIds.length) return false;
+  if (afterIds.some((id) => !id) || new Set(afterIds).size !== afterIds.length) return false;
+
+  const beforeSet = new Set(beforeIds);
+  const afterSet = new Set(afterIds);
+  const retainedBefore = beforeIds.filter((id) => afterSet.has(id));
+  const retainedAfter = afterIds.filter((id) => beforeSet.has(id));
+  if (retainedBefore.length !== retainedAfter.length
+    || retainedBefore.some((id, index) => id !== retainedAfter[index])) return false;
+
+  const firstNewIndex = afterIds.findIndex((id) => !beforeSet.has(id));
+  return firstNewIndex < 0 || !afterIds.slice(firstNewIndex).some((id) => beforeSet.has(id));
+}
+
+function statusTransitionError(current: Incident, next: Incident, role: IncidentRole): string {
+  if (current.status === next.status) return '';
+  const allowed: Record<string, string[]> = {
+    Draft: ['Open', 'Cancel'],
+    Open: ['Monitoring', 'Resolved', 'Cancel'],
+    Monitoring: ['Open', 'Resolved', 'Cancel'],
+    Resolved: ['Closed', 'Open'],
+    Closed: ['Open'],
+    Cancel: ['Open'],
+  };
+  if (!(allowed[current.status] || []).includes(next.status)) return 'invalid_status_transition';
+  const operatorAllowed =
+    (current.status === 'Draft' && next.status === 'Open')
+    || (current.status === 'Open' && next.status === 'Monitoring')
+    || (current.status === 'Monitoring' && next.status === 'Open');
+  if (role === 'operator' && !operatorAllowed) return 'supervisor_required_to_close';
+  if (['Resolved', 'Closed', 'Cancel'].includes(current.status)
+    && next.status === 'Open'
+    && !next.reopenReason.trim()) return 'reopen_reason_required';
+  return '';
+}
+
+function validateIncidentPayload(incident: Incident, current?: Incident): string {
+  if (incident.status !== 'Draft') {
+    if (incident.identityMode === 'b2b') {
+      if (!incident.b2bTitle.trim()) return 'b2b_title_required';
+    } else {
+      const legacyIdentity = Boolean(current && (
+        current.incidentId.trim()
+        || (current.group.trim() && current.linkA.trim() && current.linkB.trim())
+      ));
+      if (!incident.titleOverride.trim() && !legacyIdentity) return 'title_required';
+    }
+  }
+
+  const occurAt = Date.parse(incident.occurTime || '');
+  const dispatchAt = Date.parse(incident.dispatchTime || '');
+  const closedAt = Date.parse(incident.closedTime || '');
+  if (Number.isFinite(dispatchAt) && Number.isFinite(occurAt) && dispatchAt < occurAt) {
+    return 'dispatch_before_occur';
+  }
+
+  const latestProgressAt = (incident.progress || []).reduce((latest, row) => {
+    const parsed = Date.parse(`${row.date}T${row.time}`);
+    return Number.isFinite(parsed) ? Math.max(latest, parsed) : latest;
+  }, 0);
+  if (Number.isFinite(closedAt) && latestProgressAt && closedAt < latestProgressAt) {
+    return 'closed_before_latest_progress';
+  }
+
+  if (incident.status === 'Resolved' || incident.status === 'Closed') {
+    if (!(incident.progress || []).some((row) => /normal|closed|clear|recovered|recovery/i.test(row.text || ''))) {
+      return 'recovery_update_required';
+    }
+  }
+
+  if (incident.status === 'Closed') {
+    const checklist = incident.checklist;
+    if (!incident.closedTime) return 'closed_time_required';
+    if (!checklist || !['statementWag', 'ticketStatus', 'photo', 'rfo', 'closedEmail'].every((key) =>
+      Boolean(checklist[key as keyof typeof checklist]))) return 'closing_checklist_incomplete';
+    if (!incident.closingEvidenceNote.trim()) return 'closing_evidence_required';
+  }
+
+  if (current?.deletedAt) return 'incident_in_trash';
+  return '';
+}
+
 function normalizeIncidentRecord(
   value: Partial<Incident>,
   user: User,
@@ -235,6 +328,10 @@ export async function createIncident(
 ): Promise<Incident> {
   const id = newId();
   const incident = normalizeIncidentRecord({ ...value, id }, user);
+  const validationError = validateIncidentPayload(incident);
+  if (validationError) {
+    throw new FirebaseRepositoryError(validationError, 'Data incident belum memenuhi validasi workflow.');
+  }
   const incidentRef = doc(firestore, incidentsPath(workspaceId), id);
   const auditRef = doc(collection(firestore, auditPath(workspaceId, id)));
   const normalized = normalizeKey(incident.incidentId);
@@ -275,9 +372,15 @@ export async function saveIncident(
   const nextNormalized = normalizeKey(value.incidentId);
 
   return runTransaction(firestore, async (transaction) => {
-    const currentSnapshot = await transaction.get(incidentRef);
+    const [currentSnapshot, memberSnapshot] = await Promise.all([
+      transaction.get(incidentRef),
+      transaction.get(doc(firestore, membersPath(workspaceId), user.uid)),
+    ]);
     if (!currentSnapshot.exists()) {
       throw new FirebaseRepositoryError('incident_not_found', 'Incident tidak ditemukan.');
+    }
+    if (!memberSnapshot.exists() || memberSnapshot.data().status !== 'active') {
+      throw new FirebaseRepositoryError('workspace_membership_missing', 'Keanggotaan workspace tidak aktif.');
     }
 
     const current = { ...currentSnapshot.data(), id: currentSnapshot.id } as Incident;
@@ -286,6 +389,20 @@ export async function saveIncident(
     }
     if (value.revision !== current.revision) {
       throw new FirebaseRepositoryError('revision_conflict', 'Data incident sudah berubah di perangkat lain.', current);
+    }
+
+    const role = memberSnapshot.data().role as Role;
+    const next = normalizeIncidentRecord(value, user, current);
+    const transitionError = statusTransitionError(current, next, role);
+    if (transitionError) {
+      throw new FirebaseRepositoryError(transitionError, 'Perubahan status tidak sesuai workflow atau role akun.');
+    }
+    if (!progressHistoryChangeIsValid(current.progress, next.progress)) {
+      throw new FirebaseRepositoryError('progress_history_immutable', 'Urutan progress lama tidak boleh diubah; update baru harus ditambahkan di akhir timeline.');
+    }
+    const validationError = validateIncidentPayload(next, current);
+    if (validationError) {
+      throw new FirebaseRepositoryError(validationError, 'Data incident belum memenuhi validasi workflow.');
     }
 
     const previousNormalized = normalizeKey(current.incidentId);
@@ -300,7 +417,6 @@ export async function saveIncident(
       }
     }
 
-    const next = normalizeIncidentRecord(value, user, current);
     const fields = changedFields(current, next);
     transaction.set(incidentRef, { ...next, normalizedIncidentId: nextNormalized });
     transaction.set(auditRef, {
