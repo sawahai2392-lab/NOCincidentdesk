@@ -156,13 +156,16 @@ test('restores the previous settings when Route Master commit fails and old batc
 
 test('reports uncertain commit outcome without rolling back settings blindly', async () => {
   const state = createDependencies();
+  let reads = 0;
   state.dependencies.commitRouteMaster = async () => {
     state.calls.push(['commit-failed']);
     throw new Error('network lost');
   };
   state.dependencies.readActiveRouteMaster = async () => {
-    state.calls.push(['read-active-failed']);
-    throw new Error('offline');
+    reads += 1;
+    state.calls.push(['read-active', reads]);
+    if (reads > 1) throw new Error('offline');
+    return state.active;
   };
   const result = await executeSelectiveWorkspaceRestore(input(), state.dependencies);
 
@@ -192,6 +195,21 @@ test('reports partial state when compensating settings write fails', async () =>
   assert.equal(result.status, 'partial');
   assert.equal(result.partial, true);
   assert.match(result.errors.join(' '), /rollback denied/i);
+});
+
+
+test('rolls back Settings if another Admin switches the active Route Master during staging', async () => {
+  const state = createDependencies();
+  state.dependencies.commitRouteMaster = async (_batchId, metadata) => {
+    state.calls.push(['commit-conflict', metadata.expectedCurrentBatchId]);
+    state.active.meta = { currentBatchId: 'concurrent-batch' };
+    throw new Error('Route Master aktif berubah selama restore berlangsung.');
+  };
+  const result = await executeSelectiveWorkspaceRestore(input(), state.dependencies);
+
+  assert.equal(result.status, 'failed');
+  assert.equal(result.settingsRolledBack, true);
+  assert.deepEqual(state.calls.filter(call => call[0] === 'saveSettings').map(call => call[1]), ['NOC', 'OLD']);
 });
 
 test('settings-only restore never starts or commits Route Master', async () => {
