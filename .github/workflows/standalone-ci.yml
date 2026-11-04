@@ -1,0 +1,44 @@
+name: Standalone CI
+
+on:
+  push:
+    branches:
+      - feat/standalone-platform-migration
+  pull_request:
+    branches:
+      - main
+      - feat/tt-editor-quick-updates
+      - feat/standalone-platform-migration
+
+permissions:
+  contents: read
+
+concurrency:
+  group: standalone-ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Node.js 26
+        uses: actions/setup-node@v4
+        with:
+          node-version: 26
+          cache: npm
+          cache-dependency-path: source/package-lock.json
+
+      - name: Install dependencies
+        working-directory: source
+        run: npm install --no-audit --no-fund
+
+      - name: Typecheck API workspace
+        working-directory: source
+        run: npm run typecheck
+
+      - name: Production build
+        working-directory: source
+        run: npm run build
