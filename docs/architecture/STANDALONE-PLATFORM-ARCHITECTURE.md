@@ -19,7 +19,7 @@ Use supported, stable releases only. Do not adopt prerelease or experimental pac
 | Layer | Target | Reason |
 |---|---|---|
 | Runtime | Node.js 26 Active LTS | The machine already has Node 26.13.0; Node 26 entered Active LTS on 2026-10-28. |
-| Language | TypeScript 6.x, strict mode | Shared compile-time contracts across browser, API, and database. |
+| Language | TypeScript 7.0.2, strict mode | Shared compile-time contracts across browser, API, and database. |
 | Web UI | React 19.3 + Vite 8.3 | Keep the current client-first dashboard and modernize the build tool without forcing an SSR rewrite where SEO is irrelevant. |
 | Routing/data | TanStack Router + TanStack Query | Typed route parameters, route loaders, cache invalidation, prefetching, and predictable server-state handling. |
 | API | Hono 4.13.x on Node.js | Small Web-standards-based HTTP layer, portable beyond one hosting platform, and directly compatible with Better Auth's Request/Response handler. |
