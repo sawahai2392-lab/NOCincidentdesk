@@ -263,8 +263,8 @@ function App() {
     useEffect(() => { localStorage.setItem('noc-sidebar-collapsed', String(sidebarCollapsed)); }, [sidebarCollapsed]);
     useEffect(() => { if (view !== 'editor') { setFocusMode(false); setQuickUpdateOpen(false); } if (['dashboard', 'operations', 'reliability', 'risk', 'archive', 'tracker', 'handover', 'team'].includes(view)) localStorage.setItem('noc-last-view', view); }, [view]);
     useEffect(() => {
-        if (view === 'settings' && isAdmin) void loadWorkspaceRestoreRecovery();
-    }, [view, isAdmin, data?.profile.workspaceId]);
+        if (view === 'settings' && data?.profile.role === 'admin') void loadWorkspaceRestoreRecovery();
+    }, [view, data?.profile.role, data?.profile.workspaceId]);
     useEffect(() => {
         const workspaceId = data?.profile.workspaceId; const userId = data?.profile.userId; if (!workspaceId || !userId) return;
         const key = `noc-running:${workspaceId}:${userId}`;
@@ -730,7 +730,7 @@ function App() {
     }
 
     async function reactivatePreviousRouteMaster(batch: any) {
-        if (!data || !isAdmin || !workspaceRestoreRecovery || workspaceRestoreRecoveryRecoveryBusy) return;
+        if (!data || !isAdmin || !workspaceRestoreRecovery || workspaceRestoreRecoveryBusy || workspaceRestoreRecoveryAction) return;
         if (!canReactivateRouteMasterBatch(batch, workspaceRestoreRecovery.recovery?.activeBatchId || null)) return;
         const label = batch.sourceFileName || batch.id;
         if (!window.confirm(`Aktifkan kembali Route Master "${label}"? Batch aktif saat ini tetap disimpan untuk recovery berikutnya.`)) return;
