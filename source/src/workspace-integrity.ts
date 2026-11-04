@@ -290,14 +290,20 @@ export function buildWorkspaceIntegrityReport(
     const incidentId = text(key.data.incidentId);
     const normalizedKey = text(key.data.normalizedKey);
     const incident = incidentById.get(incidentId);
-    const orphaned = !incident
+    // When incident coverage is partial, an unseen target is unknown, not orphaned.
+    const targetIsUnknown = !incident && snapshot.incidentsTruncated;
+    const orphaned = !targetIsUnknown && (
+      !incident
       || numeric(incident.data.deletedAt) > 0
-      || text(incident.data.normalizedIncidentId) !== normalizedKey;
+      || text(incident.data.normalizedIncidentId) !== normalizedKey
+    );
     if (orphaned) {
       const canDelete = Boolean(incidentId && normalizedKey && (
-        !incident
-        || numeric(incident.data.deletedAt) > 0
-        || text(incident.data.normalizedIncidentId) !== normalizedKey
+        (!incident && !snapshot.incidentsTruncated)
+        || (incident && (
+          numeric(incident.data.deletedAt) > 0
+          || text(incident.data.normalizedIncidentId) !== normalizedKey
+        ))
       ));
       evaluate(false, 'warning', {
         id: 'incident-key:orphan:' + key.id,
