@@ -46,7 +46,7 @@ service cloud.firestore {
         && getAfter(invitationPath(request.resource.data.inviteCode)).data.workspaceId == workspaceId
         && getAfter(invitationPath(request.resource.data.inviteCode)).data.email == request.auth.token.email
         && getAfter(invitationPath(request.resource.data.inviteCode)).data.role == request.resource.data.role
-        && getAfter(invitationPath(request.resource.data.inviteCode)).data.expiresAt > request.time.toMillis();
+        && getAfter(invitationPath(request.resource.data.inviteCode)).data.expiresAt > request.time;
     }
 
     function allowedIncidentFields() {
@@ -276,7 +276,7 @@ service cloud.firestore {
         && request.resource.data.status == 'pending'
         && request.resource.data.role in ['operator', 'supervisor']
         && request.resource.data.email is string
-        && request.resource.data.expiresAt is number;
+        && request.resource.data.expiresAt is timestamp;
 
       allow update: if (
         isAdmin(resource.data.workspaceId)
@@ -291,7 +291,7 @@ service cloud.firestore {
         && request.resource.data.joinedBy == request.auth.uid
         && request.resource.data.workspaceId == resource.data.workspaceId
         && request.resource.data.email == resource.data.email
-        && resource.data.expiresAt > request.time.toMillis()
+        && resource.data.expiresAt > request.time
         && request.resource.data.diff(resource.data).affectedKeys()
           .hasOnly(['status', 'joinedAt', 'joinedBy'])
       );
