@@ -972,48 +972,59 @@ export async function commitRouteMasterImport(
   metadata: Record<string, unknown>,
 ): Promise<void> {
   const expectedCount = typeof metadata.totalCount === 'number' ? metadata.totalCount : 0;
+  const expectedFingerprint = typeof metadata.expectedFingerprint === 'string'
+    ? metadata.expectedFingerprint
+    : undefined;
   if (!batchId.trim() || !Number.isInteger(expectedCount)
-    || expectedCount < 1 || expectedCount > 20000) {
-    throw new FirebaseRepositoryError('route_master_invalid_count', 'Jumlah mapping route master tidak valid.');
+    || expectedCount < 1 || expectedCount > 20000
+    || (Object.prototype.hasOwnProperty.call(metadata, 'expectedFingerprint') && !expectedFingerprint)) {
+    throw new FirebaseRepositoryError('route_master_invalid_count', 'Jumlah mapping atau fingerprint Route Master tidak valid.');
   }
 
   const batchRef = doc(firestore, workspacePath(workspaceId) + '/routeMasterBatches', batchId);
-  const batchSnapshot = await getDoc(batchRef);
-  if (!batchSnapshot.exists() || batchSnapshot.data().status !== 'staging') {
-    throw new FirebaseRepositoryError('route_master_staging_not_found', 'Batch staging Route Master tidak ditemukan atau sudah tidak berstatus staging.');
-  }
-
-  const chunks = await getDocs(
-    query(
-      collection(firestore, workspacePath(workspaceId) + '/routeMasterBatches/' + batchId + '/chunks'),
-      orderBy('chunkIndex', 'asc'),
-      limit(60),
-    ),
-  );
-  const validation = validateRouteMasterChunkSet(
-    chunks.docs.map((item) => ({
-      chunkIndex: Number(item.data().chunkIndex),
-      items: item.data().items,
-    })),
-    expectedCount,
-  );
-  if (!validation.valid) {
-    throw new FirebaseRepositoryError('route_master_staging_invalid', validation.errors.join(' '));
-  }
-
-  const expectedCurrentBatchId = Object.prototype.hasOwnProperty.call(metadata, 'expectedCurrentBatchId')
-    ? (typeof metadata.expectedCurrentBatchId === 'string' && metadata.expectedCurrentBatchId ? metadata.expectedCurrentBatchId : null)
-    : undefined;
-  const { totalCount: _totalCount, expectedCurrentBatchId: _expectedCurrentBatchId, ...publicMetadata } = metadata;
   const metaRef = doc(firestore, workspacePath(workspaceId) + '/routeMasterMeta/main');
+  const chunksQuery = query(
+    collection(firestore, workspacePath(workspaceId) + '/routeMasterBatches/' + batchId + '/chunks'),
+    orderBy('chunkIndex', 'asc'),
+    limit(60),
+  );
+  const hasExpectedCurrentBatch = Object.prototype.hasOwnProperty.call(metadata, 'expectedCurrentBatchId');
+  const expectedCurrentBatchId = hasExpectedCurrentBatch
+    ? (typeof metadata.expectedCurrentBatchId === 'string' && metadata.expectedCurrentBatchId
+      ? metadata.expectedCurrentBatchId
+      : null)
+    : undefined;
+  const {
+    totalCount: _totalCount,
+    expectedFingerprint: _expectedFingerprint,
+    expectedCurrentBatchId: _expectedCurrentBatchId,
+    ...publicMetadata
+  } = metadata;
+
   await runTransaction(firestore, async (transaction) => {
-    const [latestBatch, latestMeta] = await Promise.all([
+    // Read the batch, active pointer, and every staged chunk in one consistent
+    // transaction snapshot so a chunk cannot be replaced between validation and activation.
+    const [latestBatch, latestMeta, chunksSnapshot] = await Promise.all([
       transaction.get(batchRef),
       transaction.get(metaRef),
+      transaction.get(chunksQuery),
     ]);
     if (!latestBatch.exists() || latestBatch.data().status !== 'staging') {
       throw new FirebaseRepositoryError('route_master_staging_not_found', 'Batch staging Route Master sudah tidak tersedia.');
     }
+
+    const validation = validateRouteMasterChunkSet(
+      chunksSnapshot.docs.map((item) => ({
+        chunkIndex: Number(item.data().chunkIndex),
+        items: item.data().items,
+      })),
+      expectedCount,
+      expectedFingerprint,
+    );
+    if (!validation.valid) {
+      throw new FirebaseRepositoryError('route_master_staging_invalid', validation.errors.join(' '));
+    }
+
     const activeBatchValue = latestMeta.exists() && typeof latestMeta.data().currentBatchId === 'string'
       ? latestMeta.data().currentBatchId
       : '';
@@ -1024,6 +1035,7 @@ export async function commitRouteMasterImport(
         'Route Master aktif berubah selama restore berlangsung. Batch lama tetap aktif; muat ulang sebelum mencoba lagi.',
       );
     }
+
     // Batch status and active pointer are switched atomically with an optimistic
     // concurrency check. The previous committed batch is intentionally retained.
     transaction.update(batchRef, {
