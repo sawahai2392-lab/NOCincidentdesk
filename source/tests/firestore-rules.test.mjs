@@ -441,4 +441,21 @@ test('hard delete is disabled for both Admin and Operator in Spark-only mode', a
 
   await assertFails(deleteDoc(doc(operatorDb, 'workspaces/workspace-a/incidents/incident-a')));
   await assertFails(deleteDoc(doc(adminDb, 'workspaces/workspace-a/incidents/incident-a')));
+
+  await testEnv.withSecurityRulesDisabled(async (context) => {
+    const db = context.firestore();
+    await setDoc(doc(db, 'workspaces/workspace-a/incidents/incident-a/audit/audit-1'), {
+      action: 'deleted',
+      actorId: 'admin-a',
+      createdAt: 10,
+    });
+    await setDoc(doc(db, 'workspaces/workspace-a/incidents/incident-a/versions/version-1'), {
+      createdBy: 'admin-a',
+      incident: { id: 'incident-a' },
+      createdAt: 9,
+    });
+  });
+
+  await assertFails(deleteDoc(doc(adminDb, 'workspaces/workspace-a/incidents/incident-a/audit/audit-1')));
+  await assertFails(deleteDoc(doc(adminDb, 'workspaces/workspace-a/incidents/incident-a/versions/version-1')));
 });

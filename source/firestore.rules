@@ -270,8 +270,8 @@ service cloud.firestore {
           allow create: if activeMember(workspaceId)
             && request.resource.data.actorId == request.auth.uid;
           allow update: if false;
-          allow delete: if isAdmin(workspaceId)
-            && get(/databases/$(database)/documents/workspaces/$(workspaceId)/incidents/$(incidentId)).data.deletedAt > 0;
+          // Audit history is immutable in Spark-only mode.
+          allow delete: if false;
         }
 
         match /versions/{versionId} {
@@ -280,8 +280,8 @@ service cloud.firestore {
             && request.resource.data.createdBy == request.auth.uid
             && request.resource.data.incident.id == incidentId;
           allow update: if false;
-          allow delete: if isAdmin(workspaceId)
-            && get(/databases/$(database)/documents/workspaces/$(workspaceId)/incidents/$(incidentId)).data.deletedAt > 0;
+          // Version history is immutable in Spark-only mode.
+          allow delete: if false;
         }
       }
 
