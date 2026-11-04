@@ -784,7 +784,12 @@ export async function joinWorkspace(code: string, user: User): Promise<void> {
     if (!inviteSnapshot.exists()) throw new FirebaseRepositoryError('invite_not_found', 'Undangan tidak ditemukan.');
     const invite = inviteSnapshot.data();
     if (invite.status !== 'pending') throw new FirebaseRepositoryError('invite_revoked', 'Undangan tidak lagi aktif.');
-    if (Number(invite.expiresAt) < now()) throw new FirebaseRepositoryError('invite_expired', 'Undangan sudah kedaluwarsa.');
+    const inviteExpiresAt = invite.expiresAt instanceof Timestamp
+      ? invite.expiresAt.toMillis()
+      : Number(invite.expiresAt);
+    if (!Number.isFinite(inviteExpiresAt) || inviteExpiresAt < now()) {
+      throw new FirebaseRepositoryError('invite_expired', 'Undangan sudah kedaluwarsa.');
+    }
     if (String(invite.email).toLowerCase() !== String(user.email || '').toLowerCase()) {
       throw new FirebaseRepositoryError('invite_not_allowed', 'Undangan hanya berlaku untuk email yang dituju.');
     }
@@ -796,34 +801,64 @@ export async function joinWorkspace(code: string, user: User): Promise<void> {
       transaction.get(memberRef),
       transaction.get(userRef),
     ]);
-    if (memberSnapshot.exists()) throw new FirebaseRepositoryError('account_already_has_workspace', 'Akun sudah menjadi anggota workspace ini.');
-    if (userSnapshot.exists()) {
+
+    if (memberSnapshot.exists() && memberSnapshot.data().status !== 'removed') {
+      throw new FirebaseRepositoryError('account_already_has_workspace', 'Akun sudah menjadi anggota aktif workspace ini.');
+    }
+    if (userSnapshot.exists() && String(userSnapshot.data().workspaceId || '') !== workspaceId) {
       throw new FirebaseRepositoryError('account_already_has_workspace', 'Akun sudah terhubung ke workspace lain.');
     }
 
     const joinedAt = now();
     const role: Role = invite.role === 'supervisor' ? 'supervisor' : 'operator';
-    transaction.set(memberRef, {
+    const name = user.displayName || user.email?.split('@')[0] || 'NOC User';
+    const memberData = {
       userId: user.uid,
       workspaceId,
       role,
       email: user.email || '',
-      name: user.displayName || user.email?.split('@')[0] || 'NOC User',
-      createdAt: joinedAt,
+      name,
       joinedAt,
       status: 'active',
       inviteCode: code,
-    });
-    transaction.set(userRef, {
-      uid: user.uid,
-      workspaceId,
-      role,
-      email: user.email || '',
-      name: user.displayName || user.email?.split('@')[0] || 'NOC User',
-      photoURL: user.photoURL || '',
-      createdAt: joinedAt,
-      updatedAt: joinedAt,
-    });
+    };
+
+    if (memberSnapshot.exists()) {
+      transaction.update(memberRef, {
+        role,
+        email: memberData.email,
+        name,
+        joinedAt,
+        status: 'active',
+        inviteCode: code,
+        removedAt: null,
+      });
+    } else {
+      transaction.set(memberRef, {
+        ...memberData,
+        createdAt: joinedAt,
+      });
+    }
+
+    if (userSnapshot.exists()) {
+      transaction.update(userRef, {
+        name,
+        photoURL: user.photoURL || '',
+        updatedAt: joinedAt,
+      });
+    } else {
+      transaction.set(userRef, {
+        uid: user.uid,
+        workspaceId,
+        role,
+        email: user.email || '',
+        name,
+        photoURL: user.photoURL || '',
+        createdAt: joinedAt,
+        updatedAt: joinedAt,
+      });
+    }
+
     transaction.update(inviteRef, {
       status: 'joined',
       joinedAt,
