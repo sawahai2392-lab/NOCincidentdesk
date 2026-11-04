@@ -708,7 +708,14 @@ export async function restoreVersion(
   if (versionIncident.id !== incidentId) {
     throw new FirebaseRepositoryError('version_incident_mismatch', 'Snapshot tidak cocok dengan incident yang dipilih.');
   }
-  const restored = { ...versionIncident, id: incidentId, revision: current.revision };
+  // Progress is an append-only operational record. Restoring an older
+  // snapshot must not erase timeline entries added after that snapshot.
+  const restored = {
+    ...versionIncident,
+    id: incidentId,
+    revision: current.revision,
+    progress: current.progress,
+  };
   return saveIncident(workspaceId, user, restored, {
     action: 'version_restored',
     summary: 'Incident dipulihkan dari version snapshot',
