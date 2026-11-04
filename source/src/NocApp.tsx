@@ -1066,7 +1066,7 @@ function App() {
 <div className='restore-recovery-list'>
 {(workspaceRestoreRecovery.recovery?.committedBatches || []).length ? workspaceRestoreRecovery.recovery.committedBatches.map((batch: any) => <div className='restore-recovery-row' key={batch.id}>
 <div><strong>{batch.sourceFileName || batch.id}</strong><small>{batch.id}</small><small>{Number(batch.count || 0).toLocaleString('id-ID')} mapping · {batch.committedAt ? new Date(batch.committedAt).toLocaleString('id-ID') : 'Waktu commit tidak tersedia'}</small></div>
-{batch.id === workspaceRestoreRecovery.recovery?.activeBatchId ? <Badge tone='success'>Aktif</Badge> : <Button size='sm' variant='secondary' disabled={!canReactivateRouteMasterBatch(batch, workspaceRestoreRecovery.recovery?.activeBatchId || null) || workspaceRestoreRecoveryBusy || Boolean(workspaceRestoreRecoveryAction)} loading={workspaceRestoreRecoveryAction === batch.id} onClick={() => void reactivatePreviousRouteMaster(batch)}>Aktifkan</Button>}
+{batch.id === workspaceRestoreRecovery.recovery?.activeBatchId ? <Badge tone='success'>Aktif</Badge> : <Button variant='secondary' className='restore-recovery-action' disabled={!canReactivateRouteMasterBatch(batch, workspaceRestoreRecovery.recovery?.activeBatchId || null) || workspaceRestoreRecoveryBusy || Boolean(workspaceRestoreRecoveryAction)} onClick={() => void reactivatePreviousRouteMaster(batch)}>{workspaceRestoreRecoveryAction === batch.id ? 'Memproses…' : 'Aktifkan'}</Button>}
 </div>) : <small>Belum ada batch committed yang tercatat.</small>}
 </div></div>
 </div>
@@ -1075,7 +1075,7 @@ function App() {
 <div className='restore-recovery-list'>
 {(workspaceRestoreRecovery.recovery?.stagingBatches || []).length ? workspaceRestoreRecovery.recovery.stagingBatches.map((batch: any) => <div className='restore-recovery-row' key={batch.id}>
 <div><strong>{batch.id}</strong><small>Terakhir aktif: {batch.lastActivityAt ? new Date(batch.lastActivityAt).toLocaleString('id-ID') : 'Waktu tidak tersedia'}</small><small>{batch.stale ? 'Tidak aktif ≥ 24 jam' : 'Masih dalam masa aman'}</small></div>
-{batch.stale ? <Button size='sm' variant='secondary' color='danger' disabled={workspaceRestoreRecoveryBusy || Boolean(workspaceRestoreRecoveryAction)} loading={workspaceRestoreRecoveryAction === batch.id} onClick={() => void cleanupStaleRouteMaster(batch)}>Bersihkan</Button> : <Badge tone='muted'>Dipertahankan</Badge>}
+{batch.stale ? <Button variant='secondary' className='restore-recovery-action danger-action' disabled={workspaceRestoreRecoveryBusy || Boolean(workspaceRestoreRecoveryAction)} onClick={() => void cleanupStaleRouteMaster(batch)}>{workspaceRestoreRecoveryAction === batch.id ? 'Memproses…' : 'Bersihkan'}</Button> : <Badge tone='muted'>Dipertahankan</Badge>}
 </div>) : <small>Tidak ada staging batch yang perlu ditinjau.</small>}
 </div>
 {workspaceRestoreRecovery.recovery?.stagingScanTruncated && <small>Hasil staging dibatasi 100 batch. Refresh atau lakukan pemeriksaan lanjutan jika jumlah batch melebihi batas ini.</small>}
@@ -1086,7 +1086,7 @@ function App() {
 <div className='restore-recovery-list'>
 {(workspaceRestoreRecovery.operations || []).length ? workspaceRestoreRecovery.operations.map((operation: any) => {
 const displayedStatus = getRestoreOperationDisplayStatus(operation, clock);
-const statusTone = displayedStatus === 'completed' ? 'success' : displayedStatus === 'failed' || displayedStatus === 'partial' ? 'danger' : displayedStatus === 'needs-review' ? 'warning' : 'info';
+const statusTone = displayedStatus === 'completed' ? 'success' : displayedStatus === 'failed' || displayedStatus === 'partial' ? 'danger' : displayedStatus === 'needs-review' ? 'warning' : 'cyan';
 const operationLabel = operation.kind === 'selective-restore' ? 'Selective restore' : operation.kind === 'reactivate-route-master' ? 'Reaktivasi Route Master' : 'Cleanup staging';
 return <div className='restore-recovery-row' key={operation.id}>
 <div><strong>{operationLabel} · {operation.sourceFileName || operation.targetBatchId || operation.id}</strong><small>{operation.createdAt ? new Date(operation.createdAt).toLocaleString('id-ID') : 'Waktu tidak tersedia'} · {operation.createdByName || 'Admin'}</small><small>{(operation.selectedSections || []).join(', ') || operation.message || 'Recovery action'}</small>{operation.errors?.slice(0, 2).map((error: string, index: number) => <small key={index}>• {error}</small>)}</div>
