@@ -34,6 +34,7 @@ type User = {
     email?: string;
     name?: string;
     picture?: string;
+    emailVerified?: boolean;
 };
 type RouteMasterMeta = {
     currentBatchId?: string;
@@ -53,6 +54,9 @@ type GeminiStatus = {
 const clone = <T,>(value: T): T => JSON.parse(JSON.stringify(value)) as T;
 const errorMessage = (value: unknown) => {
     const messages: Record<string, string> = {
+        'auth/email-not-verified': 'Email belum diverifikasi. Tautan verifikasi baru sudah dikirim; periksa inbox dan folder spam.',
+        'auth/invalid-credential': 'Email atau password tidak sesuai.',
+        'auth/too-many-requests': 'Terlalu banyak percobaan masuk. Tunggu sebentar lalu coba lagi.',
         revision_conflict: 'Data di server sudah berubah. Pilih versi yang ingin dipertahankan.',
         duplicate_incident_id: 'Incident ID sudah digunakan pada incident lain.',
         invalid_status_transition: 'Perubahan status ini tidak mengikuti alur incident yang diizinkan.',
@@ -227,7 +231,7 @@ function App() {
     useEffect(() => { if (!runningHydratedKey || !data) return; const active = new Set(data.incidents.filter(item => !item.deletedAt && (item.status === 'Open' || item.status === 'Monitoring')).map(item => item.id)); setRunningIds(current => { const next = current.filter(id => active.has(id)); return next.length === current.length && next.every((id, index) => id === current[index]) ? current : next; }); }, [data?.incidents, runningHydratedKey]);
     useEffect(() => {
         let alive = true;
-        void (async () => { const pendingCode = invitesClient.getPendingCode(); if (alive) setInviteCode(pendingCode); if (pendingCode) { try { const response = await api.get(`/api/invites/${pendingCode}`); if (alive) setInviteInfo({ status: response.data.status }); } catch (err) { if (alive) setInviteInfo({ error: errorMessage(err) }); } } const current = await auth.getUser(); if (!alive) return; setUser(current as User | null); if (current && !pendingCode) await loadWorkspace(); else setLoading(false); })();
+        void (async () => { const pendingCode = invitesClient.getPendingCode(); if (alive) setInviteCode(pendingCode); if (pendingCode) { try { const response = await api.get(`/api/invites/${pendingCode}`); if (alive) setInviteInfo({ status: response.data.status }); } catch (err) { if (alive) setInviteInfo({ error: errorMessage(err) }); } } const current = await auth.getUser(); if (!alive) return; if (current && current.emailVerified === false) { try { await auth.signOut(); } catch { } setUser(null); setAuthError('Email akun belum diverifikasi. Periksa inbox untuk tautan verifikasi sebelum masuk.'); setLoading(false); return; } setUser(current as User | null); if (current && !pendingCode) await loadWorkspace(); else setLoading(false); })();
         return () => { alive = false; };
     }, []);
     useEffect(() => {
@@ -252,6 +256,13 @@ function App() {
     useEffect(() => { if (!draft || !data) return; const serialized = JSON.stringify(draft); if (serialized === lastSavedRef.current) return; storeIncidentRecovery(draft, data.profile.workspaceId, data.profile.userId); }, [draft, data?.profile.workspaceId, data?.profile.userId]);
     useEffect(() => { const blockExit = (event: BeforeUnloadEvent) => { if (saveState === 'pending' || saveState === 'saving' || saveState === 'error') { event.preventDefault(); event.returnValue = ''; } }; window.addEventListener('beforeunload', blockExit); return () => window.removeEventListener('beforeunload', blockExit); }, [saveState]);
     async function completeAuthentication(nextUser: User) {
+        if (nextUser.emailVerified === false) {
+            try { await auth.signOut(); } catch { }
+            setUser(null);
+            setData(null);
+            setAuthError('Email akun belum diverifikasi. Periksa inbox untuk tautan verifikasi sebelum masuk.');
+            return;
+        }
         setUser(nextUser);
         if (inviteCode) {
             try {
@@ -316,8 +327,10 @@ function App() {
         }
         setAuthBusy(true);
         try {
-            const result = await auth.registerWithEmail(authName, authEmail, authPassword);
-            await completeAuthentication(result.user as User);
+            await auth.registerWithEmail(authName, authEmail, authPassword);
+            setAuthMode('signin');
+            setAuthPassword('');
+            notify('Akun dibuat. Tautan verifikasi sudah dikirim ke email; verifikasi dulu sebelum masuk.', 'success');
         } catch (err) {
             setAuthError(errorMessage(err));
         } finally {
