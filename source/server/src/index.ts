@@ -1,4 +1,7 @@
 import { serve } from "@hono/node-server";
+import { serveStatic } from "@hono/node-server/serve-static";
+import { readFile } from "node:fs/promises";
+import { fileURLToPath } from "node:url";
 import { cors } from "hono/cors";
 import { logger } from "hono/logger";
 import { secureHeaders } from "hono/secure-headers";
@@ -146,6 +149,32 @@ app.get("/api/files/download", async (context) => {
 // adapter. Business validation remains in the domain modules.
 app.route("/", legacyApi);
 
+// An unknown API route must remain a JSON 404 instead of receiving the SPA shell.
+app.all("/api/*", (context) =>
+  context.json(
+    {
+      error: {
+        code: "not_found",
+        message: "API route not found"
+      }
+    },
+    404
+  )
+);
+
+// In production the same Node process serves the built Vite application.
+// During development Vite is a separate process and proxies API + Socket.IO.
+if (env.NODE_ENV === "production") {
+  const staticRoot = fileURLToPath(new URL("../../dist/", import.meta.url));
+  app.get("*", serveStatic({ root: staticRoot }));
+  app.get("*", async (context) => {
+    const accept = context.req.header("accept") || "";
+    if (!accept.includes("text/html")) return context.notFound();
+    const html = await readFile(new URL("../../dist/index.html", import.meta.url), "utf8");
+    return context.html(html);
+  });
+}
+
 app.notFound((context) =>
   context.json(
     {
@@ -180,7 +209,7 @@ const server = serve(
   {
     fetch: app.fetch,
     port: env.API_PORT,
-    hostname: "127.0.0.1"
+    hostname: env.API_HOST
   },
   (info) => {
     console.log("noc_api_listening", {
