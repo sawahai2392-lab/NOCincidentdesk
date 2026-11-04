@@ -1,6 +1,5 @@
 import {
   collection,
-  deleteDoc,
   doc,
   getDoc,
   getDocs,
@@ -11,7 +10,6 @@ import {
   runTransaction,
   setDoc,
   startAfter,
-  where,
   writeBatch,
   type DocumentData,
   type QueryDocumentSnapshot,
@@ -697,7 +695,15 @@ export function subscribeToWorkspace(
   unsubscribers.push(onSnapshot(incidentQuery, (snapshot) => {
     snapshot.docChanges().forEach((change) => {
       const incident = { ...change.doc.data(), id: change.doc.id } as Incident;
-      onIncident(incident.deletedAt ? 'incident.deleted' : 'incident.saved', incident);
+      if (change.type === 'removed') {
+        // A limited query can evict a still-existing document when newer incidents arrive.
+        // Verify before telling the UI that the document was permanently deleted.
+        void getDoc(doc(firestore, incidentsPath(workspaceId), incident.id)).then((current) => {
+          if (!current.exists()) onIncident('incident.deleted', incident);
+        });
+        return;
+      }
+      onIncident('incident.saved', incident);
     });
   }));
   unsubscribers.push(onSnapshot(doc(firestore, settingsPath(workspaceId)), (snapshot) => {
