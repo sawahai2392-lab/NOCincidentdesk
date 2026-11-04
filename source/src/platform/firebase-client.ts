@@ -155,7 +155,7 @@ async function getRequest(path: string): Promise<ApiResult> {
   }
 
   if (path === '/api/operations/health') {
-    return ok({ status: 'available', mode: 'spark-client', activeCount: 0, overdueCount: 0, staleCount: 0 });
+    return ok({ items: [], summary: { active: 0, dueSoon: 0, overdue: 0, escalated: 0, critical: 0, unassigned: 0, withoutMilestone: 0 }, scanned: 0, scanTruncated: false, mode: 'spark-client' });
   }
 
   if (path === '/api/operations/alerts') {
