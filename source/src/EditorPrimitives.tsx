@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
-import { Check, Search, WandSparkles } from 'lucide-react';
+import { Check, WandSparkles } from 'lucide-react';
 import clsx from 'clsx';
 import FloatingSelect from './UnifiedSelect';
 
