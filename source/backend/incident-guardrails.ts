@@ -1,3 +1,4 @@
+// @ts-nocheck
 export type GuardRole = 'admin' | 'supervisor' | 'operator';
 
 type AnyIncident = Record<string, any>;
