@@ -137,6 +137,42 @@ test('operator can create a draft incident in their workspace', async () => {
   }));
 });
 
+test('incident identifier requires a matching index in the same atomic write', async () => {
+  const db = testEnv.authenticatedContext('operator-a', {
+    email: 'operator@example.com',
+  }).firestore();
+
+  const withoutIndex = {
+    id: 'incident-no-index',
+    incidentId: 'TT-A-002',
+    normalizedIncidentId: 'tta002',
+    status: 'Draft',
+    severity: 'Critical',
+    deletedAt: 0,
+    createdBy: 'operator-a',
+    createdAt: 2,
+    updatedBy: 'operator-a',
+    updatedAt: 2,
+    revision: 1,
+  };
+  await assertFails(setDoc(
+    doc(db, 'workspaces/workspace-a/incidents/incident-no-index'),
+    withoutIndex,
+  ));
+
+  const batch = writeBatch(db);
+  batch.set(doc(db, 'workspaces/workspace-a/incidents/incident-with-index'), {
+    ...withoutIndex,
+    id: 'incident-with-index',
+  });
+  batch.set(doc(db, 'workspaces/workspace-a/incidentKeys/tta002'), {
+    incidentId: 'incident-with-index',
+    normalizedKey: 'tta002',
+    active: true,
+  });
+  await assertSucceeds(batch.commit());
+});
+
 test('operator cannot resolve an incident or move it to Trash', async () => {
   const db = testEnv.authenticatedContext('operator-a', {
     email: 'operator@example.com',
