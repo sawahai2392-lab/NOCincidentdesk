@@ -343,7 +343,7 @@ test('removed member can rejoin the same workspace with a fresh email-bound invi
   assert.equal(member.data()?.role, 'supervisor');
 });
 
-test('audit entries are append-only for workspace members', async () => {
+test('audit entries are append-only and must match the resulting incident revision', async () => {
   const db = testEnv.authenticatedContext('operator-a', {
     email: 'operator@example.com',
     email_verified: true,
@@ -352,14 +352,109 @@ test('audit entries are append-only for workspace members', async () => {
   await assertSucceeds(setDoc(auditRef, {
     action: 'updated',
     summary: 'Operator update',
+    changedFields: ['internalNotes'],
+    fromRevision: 1,
+    toRevision: 1,
     actorId: 'operator-a',
+    actorName: 'Operator A',
     createdAt: 2,
+  }));
+  await assertFails(setDoc(doc(db, 'workspaces/workspace-a/incidents/incident-a/audit/audit-orphan'), {
+    action: 'updated',
+    summary: 'Wrong revision',
+    changedFields: ['internalNotes'],
+    fromRevision: 1,
+    toRevision: 2,
+    actorId: 'operator-a',
+    actorName: 'Operator A',
+    createdAt: 3,
   }));
   await assertFails(setDoc(auditRef, {
     action: 'tampered',
     summary: 'Audit rewritten',
+    changedFields: [],
+    fromRevision: 1,
+    toRevision: 1,
     actorId: 'operator-a',
+    actorName: 'Operator A',
     createdAt: 3,
+  }));
+});
+
+test('version snapshots and their audit entries must be created atomically', async () => {
+  const db = testEnv.authenticatedContext('operator-a', {
+    email: 'operator@example.com',
+    email_verified: true,
+  }).firestore();
+  const incident = {
+    id: 'incident-a',
+    incidentId: 'TT-A-001',
+    status: 'Open',
+    severity: 'Major',
+    deletedAt: 0,
+    normalizedIncidentId: 'tta001',
+    createdBy: 'operator-a',
+    createdAt: 1,
+    updatedBy: 'operator-a',
+    updatedAt: 1,
+    revision: 1,
+  };
+  const version = doc(db, 'workspaces/workspace-a/incidents/incident-a/versions/version-1');
+  const audit = doc(db, 'workspaces/workspace-a/incidents/incident-a/audit/audit-1');
+  const batch = writeBatch(db);
+  batch.set(version, {
+    id: 'version-1',
+    label: 'Manual snapshot · rev 1',
+    incident,
+    revision: 1,
+    auditId: 'audit-1',
+    createdAt: 2,
+    createdBy: 'operator-a',
+    createdByName: 'Operator A',
+  });
+  batch.set(audit, {
+    action: 'snapshot_created',
+    summary: 'Version snapshot dibuat',
+    changedFields: [],
+    fromRevision: 1,
+    toRevision: 1,
+    versionId: 'version-1',
+    actorId: 'operator-a',
+    actorName: 'Operator A',
+    createdAt: 2,
+  });
+  await assertSucceeds(batch.commit());
+
+  await assertFails(setDoc(doc(db, 'workspaces/workspace-a/incidents/incident-a/versions/orphan-version'), {
+    id: 'orphan-version',
+    label: 'Unlinked snapshot',
+    incident,
+    revision: 1,
+    auditId: 'missing-audit',
+    createdAt: 3,
+    createdBy: 'operator-a',
+    createdByName: 'Operator A',
+  }));
+  await assertFails(setDoc(doc(db, 'workspaces/workspace-a/incidents/incident-a/audit/audit-orphan-snapshot'), {
+    action: 'snapshot_created',
+    summary: 'Orphan snapshot',
+    changedFields: [],
+    fromRevision: 1,
+    toRevision: 1,
+    versionId: 'missing-version',
+    actorId: 'operator-a',
+    actorName: 'Operator A',
+    createdAt: 4,
+  }));
+  await assertFails(setDoc(version, {
+    id: 'version-1',
+    label: 'Tampered',
+    incident,
+    revision: 1,
+    auditId: 'audit-1',
+    createdAt: 5,
+    createdBy: 'operator-a',
+    createdByName: 'Operator A',
   }));
 });
 
