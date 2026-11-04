@@ -8,6 +8,7 @@ on:
       - 'fix/phase7-*'
       - 'fix/phase8-*'
       - 'fix/phase9-*'
+      - 'feat/phase10-*'
   pull_request:
     branches:
       - feat/tt-editor-quick-updates
