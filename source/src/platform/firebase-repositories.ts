@@ -11,6 +11,7 @@ import {
   setDoc,
   startAfter,
   writeBatch,
+  Timestamp,
   type DocumentData,
   type QueryDocumentSnapshot,
   type Unsubscribe,
@@ -715,7 +716,7 @@ export async function createInvite(
     role: role === 'supervisor' ? 'supervisor' : 'operator',
     status: 'pending',
     createdAt: now(),
-    expiresAt: now() + 7 * 24 * 60 * 60 * 1000,
+    expiresAt: Timestamp.fromMillis(now() + 7 * 24 * 60 * 60 * 1000),
     createdBy: user.uid,
   });
   return code;
@@ -727,7 +728,12 @@ export async function getInvite(code: string, user: User | null): Promise<{ stat
   if (!snapshot.exists()) throw new FirebaseRepositoryError('invite_not_found', 'Undangan tidak ditemukan.');
   const invite = snapshot.data();
   if (invite.status !== 'pending') throw new FirebaseRepositoryError('invite_revoked', 'Undangan sudah digunakan atau dicabut.');
-  if (Number(invite.expiresAt) < now()) throw new FirebaseRepositoryError('invite_expired', 'Undangan sudah kedaluwarsa.');
+  const inviteExpiresAt = invite.expiresAt instanceof Timestamp
+      ? invite.expiresAt.toMillis()
+      : Number(invite.expiresAt);
+    if (!Number.isFinite(inviteExpiresAt) || inviteExpiresAt < now()) {
+      throw new FirebaseRepositoryError('invite_expired', 'Undangan sudah kedaluwarsa.');
+    }
   if (String(invite.email).toLowerCase() !== String(user.email || '').toLowerCase()) {
     throw new FirebaseRepositoryError('invite_not_allowed', 'Undangan hanya berlaku untuk email yang dituju.');
   }
