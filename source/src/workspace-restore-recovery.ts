@@ -76,3 +76,13 @@ export function restoreOperationStatusLabel(status: RestoreOperationStatus): str
     case 'needs-review': return 'Perlu pemeriksaan';
   }
 }
+
+export function canCleanupStaleRouteMasterBatch(
+  batch: RouteMasterRecoveryBatch & { stale?: boolean; cleanupSupported?: boolean },
+  activeBatchId: string | null,
+): boolean {
+  return batch.status === 'staging'
+    && batch.id !== activeBatchId
+    && batch.stale === true
+    && batch.cleanupSupported !== false;
+}
