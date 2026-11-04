@@ -137,7 +137,7 @@ test('operator can create a draft incident in their workspace', async () => {
   }));
 });
 
-test('operator cannot close an incident or move it to Trash', async () => {
+test('operator cannot resolve an incident or move it to Trash', async () => {
   const db = testEnv.authenticatedContext('operator-a', {
     email: 'operator@example.com',
   }).firestore();
@@ -146,7 +146,7 @@ test('operator cannot close an incident or move it to Trash', async () => {
   await assertFails(setDoc(incidentRef, {
     id: 'incident-a',
     incidentId: 'TT-A-001',
-    status: 'Closed',
+    status: 'Resolved',
     severity: 'Major',
     deletedAt: 0,
     createdBy: 'operator-a',
@@ -170,14 +170,14 @@ test('operator cannot close an incident or move it to Trash', async () => {
   }));
 });
 
-test('supervisor can mark an incident Closed', async () => {
+test('supervisor can resolve an incident', async () => {
   const db = testEnv.authenticatedContext('supervisor-a', {
     email: 'supervisor@example.com',
   }).firestore();
   await assertSucceeds(setDoc(doc(db, 'workspaces/workspace-a/incidents/incident-a'), {
     id: 'incident-a',
     incidentId: 'TT-A-001',
-    status: 'Closed',
+    status: 'Resolved',
     severity: 'Major',
     deletedAt: 0,
     createdBy: 'operator-a',
