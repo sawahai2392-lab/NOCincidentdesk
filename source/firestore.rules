@@ -44,7 +44,9 @@ service cloud.firestore {
         && getAfter(invitationPath(request.resource.data.inviteCode)).data.status == 'joined'
         && getAfter(invitationPath(request.resource.data.inviteCode)).data.joinedBy == memberUid
         && getAfter(invitationPath(request.resource.data.inviteCode)).data.workspaceId == workspaceId
-        && getAfter(invitationPath(request.resource.data.inviteCode)).data.email == request.auth.token.email;
+        && getAfter(invitationPath(request.resource.data.inviteCode)).data.email == request.auth.token.email
+        && getAfter(invitationPath(request.resource.data.inviteCode)).data.role == request.resource.data.role
+        && getAfter(invitationPath(request.resource.data.inviteCode)).data.expiresAt > request.time.toMillis();
     }
 
     function allowedIncidentFields() {
@@ -81,7 +83,8 @@ service cloud.firestore {
         && request.resource.data.uid == uid
         && request.resource.data.workspaceId is string
         && existsAfter(memberPath(request.resource.data.workspaceId, uid))
-        && getAfter(memberPath(request.resource.data.workspaceId, uid)).data.status == 'active';
+        && getAfter(memberPath(request.resource.data.workspaceId, uid)).data.status == 'active'
+        && request.resource.data.role == getAfter(memberPath(request.resource.data.workspaceId, uid)).data.role;
 
       allow update: if signedIn()
         && request.auth.uid == uid
@@ -135,7 +138,9 @@ service cloud.firestore {
           && request.resource.data.userId == resource.data.userId
           && request.resource.data.workspaceId == resource.data.workspaceId
           && request.resource.data.diff(resource.data).affectedKeys()
-            .hasOnly(['role', 'status', 'removedAt']);
+            .hasOnly(['role', 'status', 'removedAt'])
+          && request.resource.data.role in ['operator', 'supervisor']
+          && request.resource.data.status in ['active', 'removed'];
 
         allow delete: if isAdmin(workspaceId) && memberUid != request.auth.uid;
       }
@@ -253,6 +258,7 @@ service cloud.firestore {
         && request.resource.data.joinedBy == request.auth.uid
         && request.resource.data.workspaceId == resource.data.workspaceId
         && request.resource.data.email == resource.data.email
+        && resource.data.expiresAt > request.time.toMillis()
         && request.resource.data.diff(resource.data).affectedKeys()
           .hasOnly(['status', 'joinedAt', 'joinedBy'])
       );
