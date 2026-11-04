@@ -9,6 +9,8 @@ on:
       - 'fix/phase2-*'
       - 'fix/phase3-*'
       - 'fix/phase4-*'
+      - 'fix/phase5-*'
+      - 'fix/phase6-*'
   workflow_dispatch:
 
 permissions:
@@ -59,3 +61,7 @@ jobs:
       - name: Offline recovery and realtime sync tests
         working-directory: source
         run: npm run test:recovery
+
+      - name: Firestore document payload guard tests
+        working-directory: source
+        run: npm run test:payload
