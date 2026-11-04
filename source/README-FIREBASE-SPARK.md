@@ -22,9 +22,10 @@ In the Firebase Console:
 1. Create or select the Firebase project. Keep it on Spark and do not add a billing account.
 2. Register a Web App in Project settings.
 3. In Authentication > Sign-in method, enable **Email/Password** and **Google**.
-4. In Firestore Database, create the default database. Choose **Jakarta `asia-southeast2`** before provisioning. Firestore's location cannot be changed after creation.
-5. Do not create a Cloud Storage bucket.
-6. Copy the Web App config values into `source/.env` as shown below.
+4. Keep Firebase email verification enabled. New email/password registrations receive a verification link and cannot create or access a workspace until verified. The login screen also provides password-reset email.
+5. In Firestore Database, create the default database. Choose **Jakarta `asia-southeast2`** before provisioning. Firestore's location cannot be changed after creation.
+6. Do not create a Cloud Storage bucket.
+7. Copy the Web App config values into `source/.env` as shown below.
 
 The Firebase web config (including the API key) identifies the app and project; it is not a server secret. Access control is enforced by Authentication and Firestore Security Rules. Never put service-account JSON, Admin SDK credentials, Gemini secrets, or other private keys in `VITE_*` variables.
 
