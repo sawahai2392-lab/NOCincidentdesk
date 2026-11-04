@@ -192,6 +192,9 @@ function App() {
     const masterFileRef = useRef<HTMLInputElement>(null);
     const lastSavedRef = useRef('');
     const saveTimerRef = useRef<number | null>(null);
+    const saveInFlightRef = useRef<Promise<boolean> | null>(null);
+    const draftRef = useRef<Incident | null>(null);
+    draftRef.current = draft;
     const socketRef = useRef<ReturnType<typeof ws.connect> | null>(null);
     const slaNoticeMemoryRef = useRef<Set<string>>(new Set());
     const slaNoticeInitialRef = useRef<Set<string>>(new Set());
@@ -360,7 +363,73 @@ function App() {
         }
     }
     async function joinWorkspace() { if (!inviteCode || joinBusy) return; setJoinBusy(true); setJoinError(''); try { await api.post(`/api/invites/${inviteCode}/join`); invitesClient.clearPendingCode(); setInviteCode(null); setInviteInfo(null); await loadWorkspace(); notify('Berhasil bergabung ke workspace NOC.', 'success'); } catch (err) { setJoinError(errorMessage(err)); } finally { setJoinBusy(false); } }
-    async function persistDraft(incident: Incident) { if (!navigator.onLine) { setSaveState('pending'); return false; } setSaveState('saving'); try { const response = await api.put(`/api/incidents/${incident.id}`, incident); const saved = response.data.incident as Incident; lastSavedRef.current = JSON.stringify(saved); clearIncidentRecovery(data?.profile.workspaceId, data?.profile.userId, saved.id); setRemoteConflict(null); setDraft(current => current?.id === saved.id ? clone(saved) : current); upsertIncident(saved); setSaveState('saved'); return true; } catch (err) { const payload = (err as { response?: { data?: { error?: string; current?: Incident } } }).response?.data; if (payload?.error === 'revision_conflict' && payload.current) setRemoteConflict(clone(payload.current)); setSaveState('error'); notify(errorMessage(err), 'error'); return false; } }
+    async function persistDraft(incident: Incident): Promise<boolean> {
+        if (!navigator.onLine) { setSaveState('pending'); return false; }
+
+        // Autosave, reconnect, logout, and incident switching can request a save
+        // at nearly the same time. Serialize writes so they cannot race on one revision.
+        if (saveInFlightRef.current) {
+            const previousSave = saveInFlightRef.current;
+            const previousResult = await previousSave;
+            const latest = draftRef.current;
+            if (latest?.id === incident.id && JSON.stringify(latest) !== lastSavedRef.current) {
+                return persistDraft(latest);
+            }
+            return previousResult;
+        }
+
+        const operation = (async (): Promise<boolean> => {
+            setSaveState('saving');
+            try {
+                const submitted = clone(incident);
+                const response = await api.put(`/api/incidents/${submitted.id}`, submitted);
+                const saved = response.data.incident as Incident;
+                lastSavedRef.current = JSON.stringify(saved);
+                setRemoteConflict(null);
+
+                const latest = draftRef.current;
+                const hasNewerLocalEdits = latest?.id === saved.id
+                    && JSON.stringify(latest) !== JSON.stringify(submitted);
+
+                if (latest?.id === saved.id) {
+                    if (hasNewerLocalEdits) {
+                        // Preserve edits typed while the request was in flight, but
+                        // advance their base revision to the revision just committed.
+                        setDraft({
+                            ...latest,
+                            revision: saved.revision,
+                            updatedAt: saved.updatedAt,
+                            updatedBy: saved.updatedBy,
+                        });
+                        setSaveState('pending');
+                    } else {
+                        setDraft(clone(saved));
+                        clearIncidentRecovery(data?.profile.workspaceId, data?.profile.userId, saved.id);
+                        setSaveState('saved');
+                    }
+                } else {
+                    clearIncidentRecovery(data?.profile.workspaceId, data?.profile.userId, saved.id);
+                    setSaveState('saved');
+                }
+
+                upsertIncident(saved);
+                return true;
+            } catch (err) {
+                const payload = (err as { response?: { data?: { error?: string; current?: Incident } } }).response?.data;
+                if (payload?.error === 'revision_conflict' && payload.current) setRemoteConflict(clone(payload.current));
+                setSaveState('error');
+                notify(errorMessage(err), 'error');
+                return false;
+            }
+        })();
+
+        saveInFlightRef.current = operation;
+        try {
+            return await operation;
+        } finally {
+            if (saveInFlightRef.current === operation) saveInFlightRef.current = null;
+        }
+    }
     async function createIncident(seed?: Partial<Incident>) { if (!user) return null; try { const payload = { ...emptyIncident(user.name || user.email || ''), ...seed }; const response = await api.post('/api/incidents', payload); const created = response.data.incident as Incident; upsertIncident(created); openIncident(created); notify('Draft incident baru dibuat.', 'success'); return created; } catch (err) { notify(errorMessage(err), 'error'); return null; } }
     function pinRunningIncident(id: string) { setRunningIds(current => current.includes(id) ? current : [...current, id]); }
     function removeRunningIncident(id: string) { setRunningIds(current => current.filter(item => item !== id)); }
