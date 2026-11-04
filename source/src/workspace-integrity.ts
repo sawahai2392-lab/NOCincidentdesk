@@ -89,6 +89,10 @@ function keyIdFromNormalized(normalizedKey: string): string {
   return encodeURIComponent(normalizedKey).replace(/\./g, '%2E');
 }
 
+function normalizeIncidentKey(value: string): string {
+  return value.normalize('NFKC').trim().toLowerCase().replace(/[^a-z0-9]+/g, '');
+}
+
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === 'object' && value !== null && !Array.isArray(value);
 }
@@ -123,7 +127,7 @@ export function buildWorkspaceIntegrityReport(
   const activeAdmins = snapshot.members.filter((member) =>
     member.data.status === 'active' && member.data.role === 'admin',
   );
-  evaluate(activeAdmins.length > 0, 'critical', {
+  evaluate(activeAdmins.length > 0, snapshot.membersTruncated ? 'warning' : 'critical', {
     id: 'members:no-active-admin',
     category: 'members',
     title: 'Tidak ada Admin aktif',
@@ -133,7 +137,7 @@ export function buildWorkspaceIntegrityReport(
     !text(workspace.ownerUid) || activeAdmins.some((member) =>
       member.id === text(workspace.ownerUid) || member.data.userId === text(workspace.ownerUid),
     ),
-    'critical',
+    snapshot.membersTruncated ? 'warning' : 'critical',
     {
       id: 'members:owner-not-active',
       category: 'members',
@@ -151,7 +155,7 @@ export function buildWorkspaceIntegrityReport(
 
   for (const member of snapshot.members) {
     evaluate(
-      !text(member.data.userId) || text(member.data.userId) === member.id,
+      text(member.data.userId) === member.id,
       'warning',
       {
         id: 'member:user-id:' + member.id,
@@ -162,7 +166,7 @@ export function buildWorkspaceIntegrityReport(
       },
     );
     evaluate(
-      !text(member.data.workspaceId) || text(member.data.workspaceId) === snapshot.workspaceId,
+      text(member.data.workspaceId) === snapshot.workspaceId,
       'warning',
       {
         id: 'member:workspace-id:' + member.id,
@@ -221,6 +225,13 @@ export function buildWorkspaceIntegrityReport(
       activeByNormalized.set(normalizedKey, siblings);
       const keyId = keyIdFromNormalized(normalizedKey);
       const key = keysById.get(keyId);
+      evaluate(Boolean(text(data.incidentId)) && normalizeIncidentKey(text(data.incidentId)) === normalizedKey, 'critical', {
+        id: 'incident:normalized-key-value:' + incident.id,
+        category: 'incidents',
+        title: 'Normalized incident ID tidak cocok dengan business ID',
+        detail: 'normalizedIncidentId tidak sesuai dengan hasil normalisasi incidentId.',
+        entityId: incident.id,
+      });
       if (!key && !snapshot.incidentKeysTruncated) {
         evaluate(false, 'critical', {
           id: 'incident-key:missing:' + incident.id,
@@ -309,6 +320,13 @@ export function buildWorkspaceIntegrityReport(
         } : {}),
       });
     } else {
+      evaluate(key.id === keyIdFromNormalized(normalizedKey), 'critical', {
+        id: 'incident-key:path-orphan:' + key.id,
+        category: 'incident-keys',
+        title: 'Path index tidak cocok dengan normalized key',
+        detail: 'Document ID incidentKeys tidak sesuai dengan normalizedKey yang disimpan.',
+        entityId: key.id,
+      });
       evaluate(key.data.active === true, 'warning', {
         id: 'incident-key:inactive:' + key.id,
         category: 'incident-keys',
