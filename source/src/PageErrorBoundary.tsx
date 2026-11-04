@@ -9,6 +9,10 @@ type State = {
   hasError: boolean;
 };
 
+export function DeferredScreen({ render }: { render: () => ReactNode }) {
+  return <>{render()}</>;
+}
+
 export default class PageErrorBoundary extends Component<Props, State> {
   state: State = { hasError: false };
 
