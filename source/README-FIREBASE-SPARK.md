@@ -166,3 +166,10 @@ Keep the migration PR in draft until the full workflow regression and migration 
 - [Firebase Local Emulator Suite installation](https://firebase.google.com/docs/emulator-suite/install_and_configure)
 - [Firebase Hosting deployment](https://firebase.google.com/docs/hosting)
 - [Cloud Storage billing requirements](https://firebase.google.com/docs/storage/faqs-storage-changes-announced-sept-2024)
+
+
+## 9. Permanent deletion in Spark-only mode
+
+Permanent incident deletion is intentionally disabled while this project runs as a client-only Firebase Spark application. Firestore Security Rules can authorize a document delete by role, but cannot enumerate arbitrary child collections to prove that audit and version history have been fully removed. A client-side multi-batch cascade can fail partway through and leave orphaned records.
+
+Incidents can still be moved to Trash and restored. The permanent-delete action remains disabled, and Firestore Rules deny direct incident, audit, and version deletion for every role. Re-enable hard deletion only after introducing a trusted purge mechanism that can enumerate and delete all child collections, handle retries, and verify completion before deleting the incident and releasing its identifier.

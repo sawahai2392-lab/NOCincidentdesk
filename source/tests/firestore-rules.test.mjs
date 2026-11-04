@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import { readFile } from 'node:fs/promises';
 import { after, before, beforeEach, test } from 'node:test';
-import { doc, getDoc, setDoc, writeBatch, Timestamp } from 'firebase/firestore';
+import { deleteDoc, doc, getDoc, setDoc, writeBatch, Timestamp } from 'firebase/firestore';
 import {
   assertFails,
   assertSucceeds,
@@ -343,23 +343,155 @@ test('removed member can rejoin the same workspace with a fresh email-bound invi
   assert.equal(member.data()?.role, 'supervisor');
 });
 
-test('audit entries are append-only for workspace members', async () => {
+test('audit entries are append-only and must match the resulting incident revision', async () => {
   const db = testEnv.authenticatedContext('operator-a', {
     email: 'operator@example.com',
     email_verified: true,
   }).firestore();
   const auditRef = doc(db, 'workspaces/workspace-a/incidents/incident-a/audit/audit-1');
-  await assertSucceeds(setDoc(auditRef, {
+  const updateBatch = writeBatch(db);
+  updateBatch.update(doc(db, 'workspaces/workspace-a/incidents/incident-a'), {
+    updatedBy: 'operator-a',
+    updatedAt: 2,
+    revision: 2,
+  });
+  updateBatch.set(auditRef, {
     action: 'updated',
     summary: 'Operator update',
+    changedFields: ['internalNotes'],
+    fromRevision: 1,
+    toRevision: 2,
     actorId: 'operator-a',
+    actorName: 'Operator A',
     createdAt: 2,
+  });
+  await assertSucceeds(updateBatch.commit());
+  await assertFails(setDoc(doc(db, 'workspaces/workspace-a/incidents/incident-a/audit/audit-orphan'), {
+    action: 'updated',
+    summary: 'Wrong revision',
+    changedFields: ['internalNotes'],
+    fromRevision: 1,
+    toRevision: 3,
+    actorId: 'operator-a',
+    actorName: 'Operator A',
+    createdAt: 3,
   }));
   await assertFails(setDoc(auditRef, {
     action: 'tampered',
     summary: 'Audit rewritten',
+    changedFields: [],
+    fromRevision: 1,
+    toRevision: 1,
     actorId: 'operator-a',
+    actorName: 'Operator A',
     createdAt: 3,
+  }));
+});
+
+test('version snapshots and their audit entries must be created atomically', async () => {
+  const db = testEnv.authenticatedContext('operator-a', {
+    email: 'operator@example.com',
+    email_verified: true,
+  }).firestore();
+  const incident = {
+    id: 'incident-a',
+    incidentId: 'TT-A-001',
+    status: 'Open',
+    severity: 'Major',
+    deletedAt: 0,
+    normalizedIncidentId: 'tta001',
+    createdBy: 'operator-a',
+    createdAt: 1,
+    updatedBy: 'operator-a',
+    updatedAt: 1,
+    revision: 1,
+  };
+  const version = doc(db, 'workspaces/workspace-a/incidents/incident-a/versions/version-1');
+  const audit = doc(db, 'workspaces/workspace-a/incidents/incident-a/audit/audit-1');
+  const batch = writeBatch(db);
+  batch.set(version, {
+    id: 'version-1',
+    label: 'Manual snapshot · rev 1',
+    incident,
+    revision: 1,
+    auditId: 'audit-1',
+    createdAt: 2,
+    createdBy: 'operator-a',
+    createdByName: 'Operator A',
+  });
+  batch.set(audit, {
+    action: 'snapshot_created',
+    summary: 'Version snapshot dibuat',
+    changedFields: [],
+    fromRevision: 1,
+    toRevision: 1,
+    versionId: 'version-1',
+    actorId: 'operator-a',
+    actorName: 'Operator A',
+    createdAt: 2,
+  });
+  await assertSucceeds(batch.commit());
+
+  await assertFails(setDoc(doc(db, 'workspaces/workspace-a/incidents/incident-a/versions/orphan-version'), {
+    id: 'orphan-version',
+    label: 'Unlinked snapshot',
+    incident,
+    revision: 1,
+    auditId: 'missing-audit',
+    createdAt: 3,
+    createdBy: 'operator-a',
+    createdByName: 'Operator A',
+  }));
+  await assertFails(setDoc(doc(db, 'workspaces/workspace-a/incidents/incident-a/audit/audit-orphan-snapshot'), {
+    action: 'snapshot_created',
+    summary: 'Orphan snapshot',
+    changedFields: [],
+    fromRevision: 1,
+    toRevision: 1,
+    versionId: 'missing-version',
+    actorId: 'operator-a',
+    actorName: 'Operator A',
+    createdAt: 4,
+  }));
+  await assertFails(setDoc(doc(db, 'workspaces/workspace-a/incidents/incident-a/audit/audit-missing-version-id'), {
+    action: 'snapshot_created',
+    summary: 'Snapshot without reference',
+    changedFields: [],
+    fromRevision: 1,
+    toRevision: 1,
+    actorId: 'operator-a',
+    actorName: 'Operator A',
+    createdAt: 5,
+  }));
+
+  const restoreBatch = writeBatch(db);
+  restoreBatch.update(doc(db, 'workspaces/workspace-a/incidents/incident-a'), {
+    updatedBy: 'operator-a',
+    updatedAt: 6,
+    revision: 2,
+  });
+  restoreBatch.set(doc(db, 'workspaces/workspace-a/incidents/incident-a/audit/audit-restore'), {
+    action: 'version_restored',
+    summary: 'Incident dipulihkan dari version snapshot',
+    changedFields: ['internalNotes'],
+    fromRevision: 1,
+    toRevision: 2,
+    sourceVersionId: 'version-1',
+    actorId: 'operator-a',
+    actorName: 'Operator A',
+    createdAt: 6,
+  });
+  await assertSucceeds(restoreBatch.commit());
+
+  await assertFails(setDoc(version, {
+    id: 'version-1',
+    label: 'Tampered',
+    incident,
+    revision: 1,
+    auditId: 'audit-1',
+    createdAt: 5,
+    createdBy: 'operator-a',
+    createdByName: 'Operator A',
   }));
 });
 
@@ -410,4 +542,52 @@ test('first account can create its own Admin workspace atomically', async () => 
     updatedBy: 'first-admin',
   });
   await assertSucceeds(batch.commit());
+});
+
+test('hard delete is disabled for both Admin and Operator in Spark-only mode', async () => {
+  await testEnv.withSecurityRulesDisabled(async (context) => {
+    const db = context.firestore();
+    await setDoc(doc(db, 'workspaces/workspace-a/incidents/incident-a'), {
+      id: 'incident-a',
+      incidentId: 'TT-A-001',
+      normalizedIncidentId: 'tta001',
+      status: 'Open',
+      severity: 'Major',
+      deletedAt: 10,
+      createdBy: 'operator-a',
+      createdAt: 1,
+      updatedBy: 'admin-a',
+      updatedAt: 10,
+      revision: 2,
+    });
+  });
+
+  const operatorDb = testEnv.authenticatedContext('operator-a', {
+    email: 'operator@example.com',
+    email_verified: true,
+  }).firestore();
+  const adminDb = testEnv.authenticatedContext('admin-a', {
+    email: 'admin@example.com',
+    email_verified: true,
+  }).firestore();
+
+  await assertFails(deleteDoc(doc(operatorDb, 'workspaces/workspace-a/incidents/incident-a')));
+  await assertFails(deleteDoc(doc(adminDb, 'workspaces/workspace-a/incidents/incident-a')));
+
+  await testEnv.withSecurityRulesDisabled(async (context) => {
+    const db = context.firestore();
+    await setDoc(doc(db, 'workspaces/workspace-a/incidents/incident-a/audit/audit-1'), {
+      action: 'deleted',
+      actorId: 'admin-a',
+      createdAt: 10,
+    });
+    await setDoc(doc(db, 'workspaces/workspace-a/incidents/incident-a/versions/version-1'), {
+      createdBy: 'admin-a',
+      incident: { id: 'incident-a' },
+      createdAt: 9,
+    });
+  });
+
+  await assertFails(deleteDoc(doc(adminDb, 'workspaces/workspace-a/incidents/incident-a/audit/audit-1')));
+  await assertFails(deleteDoc(doc(adminDb, 'workspaces/workspace-a/incidents/incident-a/versions/version-1')));
 });

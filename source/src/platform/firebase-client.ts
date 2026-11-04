@@ -1,4 +1,4 @@
-import { collection, doc, getDoc, getDocs, limit, query } from 'firebase/firestore';
+import { collection, getDocs, limit, query } from 'firebase/firestore';
 import { firebaseAuth, firestore } from './firebase';
 import {
   getCurrentIdToken,
@@ -240,11 +240,14 @@ async function postRequest(path: string, body: Record<string, unknown> = {}): Pr
   if (versionMatch) {
     if (!user) throw new FirebaseApiError('auth_required', 'Silakan masuk terlebih dahulu.', 401);
     const incidentId = decodeURIComponent(versionMatch[1]);
-    const target = await getDoc(doc(firestore, 'workspaces', profile.workspaceId, 'incidents', incidentId));
-    if (!target.exists()) throw new FirebaseApiError('incident_not_found', 'Incident tidak ditemukan.', 404);
-    const incident = normalizeIncidentSnapshot(target.data(), incidentId);
-    await createVersion(profile.workspaceId, user, incident, String(body.label || 'Manual snapshot'));
-    return ok({ created: true });
+    const version = await createVersion(
+      profile.workspaceId,
+      user,
+      incidentId,
+      String(body.label || 'Manual snapshot'),
+      Number(body.revision),
+    );
+    return ok({ created: true, version });
   }
 
   if (path === '/api/route-master/import/start') {
@@ -491,34 +494,41 @@ export const ws = {
           const data = kind === 'incident.deleted'
             ? { kind, id: incident.id, incident }
             : { kind, incident };
+          if (closed) return;
           callbacks.forEach((callback) => callback({
             type: 'entity.update',
             payload: { entity_type: 'workspace', entity_id: profile.workspaceId, data },
           }));
         },
-        (settings) => callbacks.forEach((callback) => callback({
+        (settings) => {
+          if (closed) return;
+          callbacks.forEach((callback) => callback({
           type: 'entity.update',
           payload: {
             entity_type: 'workspace',
             entity_id: profile.workspaceId,
             data: { kind: 'settings.saved', settings },
           },
-        })),
-        () => callbacks.forEach((callback) => callback({
+          }));
+        },
+        () => {
+          if (closed) return;
+          callbacks.forEach((callback) => callback({
           type: 'entity.update',
           payload: {
             entity_type: 'workspace',
             entity_id: profile.workspaceId,
             data: { kind: 'member.saved' },
           },
-        })),
+          }));
+        },
       );
       if (closed) unsubscribe();
     })();
     return {
       ready,
       connectionId: null as string | null,
-      onMessage(callback: (message: unknown) => void) { callbacks.push(callback); },
+      onMessage(callback: (message: unknown) => void) { if (!closed) callbacks.push(callback); },
       disconnect() {
         closed = true;
         unsubscribe?.();
