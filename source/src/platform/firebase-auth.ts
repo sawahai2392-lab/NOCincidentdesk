@@ -7,6 +7,7 @@ import {
   signInWithEmailAndPassword,
   signInWithPopup,
   sendPasswordResetEmail,
+  sendEmailVerification,
   signOut,
   updateProfile,
   type User,
@@ -18,6 +19,7 @@ export interface NocAuthUser {
   email: string;
   name: string;
   picture: string;
+  emailVerified: boolean;
 }
 
 let persistencePromise: Promise<void> | null = null;
@@ -34,6 +36,7 @@ export function mapAuthUser(user: User | null): NocAuthUser | null {
     email: user.email || '',
     name: user.displayName || user.email?.split('@')[0] || 'NOC User',
     picture: user.photoURL || '',
+    emailVerified: user.emailVerified,
   };
 }
 
@@ -48,6 +51,16 @@ export async function signInWithGoogle(): Promise<NocAuthUser> {
 export async function signInWithEmail(email: string, password: string): Promise<NocAuthUser> {
   await ensurePersistence();
   const result = await signInWithEmailAndPassword(firebaseAuth, email.trim(), password);
+  if (!result.user.emailVerified) {
+    try {
+      await sendEmailVerification(result.user);
+    } finally {
+      await signOut(firebaseAuth);
+    }
+    const error = new Error('Email belum diverifikasi. Tautan verifikasi baru sudah dikirim.') as Error & { code: string };
+    error.code = 'auth/email-not-verified';
+    throw error;
+  }
   return mapAuthUser(result.user)!;
 }
 
@@ -65,6 +78,8 @@ export async function registerWithEmail(
   const result = await createUserWithEmailAndPassword(firebaseAuth, email.trim(), password);
   const displayName = name.trim().slice(0, 100) || email.split('@')[0];
   await updateProfile(result.user, { displayName });
+  await sendEmailVerification(result.user);
+  await signOut(firebaseAuth);
   return mapAuthUser(result.user)!;
 }
 
