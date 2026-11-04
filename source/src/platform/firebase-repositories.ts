@@ -1342,7 +1342,9 @@ export async function applyWorkspaceIntegrityRepairs(
             throw new FirebaseRepositoryError('integrity_repair_conflict', 'Incident tujuan tidak ditemukan lagi.');
           }
           const data = incidentSnapshot.data();
-          if (Number(data.deletedAt) > 0 || String(data.normalizedIncidentId || '') !== normalizedKey) {
+          if (Number(data.deletedAt) > 0
+            || String(data.normalizedIncidentId || '') !== normalizedKey
+            || normalizeKey(String(data.incidentId || '')) !== normalizedKey) {
             throw new FirebaseRepositoryError('integrity_repair_conflict', 'Incident berubah sejak hasil scan; index tidak dibuat.');
           }
           if (keySnapshot.exists()) return 'skipped';
