@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import { readFile } from 'node:fs/promises';
 import { after, before, beforeEach, test } from 'node:test';
-import { doc, getDoc, setDoc, writeBatch } from 'firebase/firestore';
+import { doc, getDoc, setDoc, writeBatch, Timestamp } from 'firebase/firestore';
 import {
   assertFails,
   assertSucceeds,
@@ -258,6 +258,72 @@ test('admin can release an incident key when moving an incident to Trash', async
   });
   batch.delete(doc(db, 'workspaces/workspace-a/incidentKeys/tta001'));
   await assertSucceeds(batch.commit());
+});
+
+test('removed member can rejoin the same workspace with a fresh email-bound invite', async () => {
+  await testEnv.withSecurityRulesDisabled(async (context) => {
+    const adminDb = context.firestore();
+    await setDoc(doc(adminDb, 'users/operator-a'), {
+      uid: 'operator-a',
+      workspaceId: 'workspace-a',
+      role: 'operator',
+      email: 'operator@example.com',
+      name: 'Operator A',
+      photoURL: '',
+      createdAt: 1,
+      updatedAt: 1,
+    });
+    await setDoc(doc(adminDb, 'workspaces/workspace-a/members/operator-a'), {
+      userId: 'operator-a',
+      workspaceId: 'workspace-a',
+      role: 'operator',
+      email: 'operator@example.com',
+      name: 'Operator A',
+      createdAt: 1,
+      joinedAt: 2,
+      status: 'removed',
+      removedAt: 3,
+    });
+    await setDoc(doc(adminDb, 'workspaceInvites/reinvite-operator-a'), {
+      workspaceId: 'workspace-a',
+      email: 'operator@example.com',
+      role: 'supervisor',
+      status: 'pending',
+      createdAt: 4,
+      expiresAt: Timestamp.fromMillis(Date.now() + 60_000),
+      createdBy: 'admin-a',
+    });
+  });
+
+  const db = testEnv.authenticatedContext('operator-a', {
+    email: 'operator@example.com',
+  }).firestore();
+  const joinedAt = Date.now();
+  const batch = writeBatch(db);
+  batch.update(doc(db, 'workspaces/workspace-a/members/operator-a'), {
+    role: 'supervisor',
+    email: 'operator@example.com',
+    name: 'Operator A',
+    joinedAt,
+    status: 'active',
+    inviteCode: 'reinvite-operator-a',
+    removedAt: null,
+  });
+  batch.update(doc(db, 'users/operator-a'), {
+    name: 'Operator A',
+    photoURL: '',
+    updatedAt: joinedAt,
+  });
+  batch.update(doc(db, 'workspaceInvites/reinvite-operator-a'), {
+    status: 'joined',
+    joinedAt,
+    joinedBy: 'operator-a',
+  });
+  await assertSucceeds(batch.commit());
+
+  const member = await getDoc(doc(db, 'workspaces/workspace-a/members/operator-a'));
+  assert.equal(member.data()?.status, 'active');
+  assert.equal(member.data()?.role, 'supervisor');
 });
 
 test('audit entries are append-only for workspace members', async () => {
