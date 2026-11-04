@@ -1,4 +1,4 @@
-import { router, json, error, requireAuth, db, storage, invites, isInviteError, secrets, notifications, ai } from '@appdeploy/sdk';
+import { router, json, error, requireAuth, db, storage, invites, isInviteError, secrets, notifications, ai } from '../server/src/standalone-sdk.js';
 import { addSubscription, removeSubscriptions, notifySubscribers } from './realtime-subscribers';
 import { runIncidentCopilot } from './copilot';
 import { dismissOperationsAlert, getOperationsAlertSummary, getOperationsAlerts, getOperationsHealth, markAllOperationsAlertsRead, markOperationsAlertRead, processOperationsEscalations } from './operations';
