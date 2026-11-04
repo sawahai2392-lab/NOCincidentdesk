@@ -18,6 +18,10 @@ service cloud.firestore {
       return /databases/$(database)/documents/workspaces/$(workspaceId)/incidents/$(incidentId);
     }
 
+    function incidentKeyPath(workspaceId, normalizedKey) {
+      return /databases/$(database)/documents/workspaces/$(workspaceId)/incidentKeys/$(normalizedKey);
+    }
+
     function incidentKeyMatchesAfter(workspaceId) {
       let target = incidentPath(workspaceId, request.resource.data.incidentId);
       return request.resource.data.incidentId is string
@@ -26,6 +30,19 @@ service cloud.firestore {
         && existsAfter(target)
         && getAfter(target).data.deletedAt == 0
         && getAfter(target).data.normalizedIncidentId == request.resource.data.normalizedKey;
+    }
+
+    function incidentHasKeyAfter(workspaceId, incidentId) {
+      let normalized = request.resource.data.normalizedIncidentId;
+      return request.resource.data.deletedAt > 0
+        || !(normalized is string)
+        || normalized.size() == 0
+        || (
+          existsAfter(incidentKeyPath(workspaceId, normalized))
+          && getAfter(incidentKeyPath(workspaceId, normalized)).data.incidentId == incidentId
+          && getAfter(incidentKeyPath(workspaceId, normalized)).data.normalizedKey == normalized
+          && getAfter(incidentKeyPath(workspaceId, normalized)).data.active == true
+        );
     }
 
     function activeMember(workspaceId) {
@@ -207,7 +224,8 @@ service cloud.firestore {
           && request.resource.data.updatedBy == request.auth.uid
           && request.resource.data.revision == 1
           && request.resource.data.deletedAt == 0
-          && request.resource.data.keys().hasOnly(allowedIncidentFields());
+          && request.resource.data.keys().hasOnly(allowedIncidentFields())
+          && incidentHasKeyAfter(workspaceId, incidentId);
 
         allow update: if activeMember(workspaceId)
           && request.resource.data.createdBy == resource.data.createdBy
@@ -219,7 +237,8 @@ service cloud.firestore {
           && (!protectedIncidentChange() || isAdmin(workspaceId))
           && validStatusTransition()
           && statusTransitionAllowedForRole(workspaceId)
-          && reopenReasonPresent();
+          && reopenReasonPresent()
+          && incidentHasKeyAfter(workspaceId, incidentId);
 
         allow delete: if isAdmin(workspaceId) && resource.data.deletedAt > 0;
 
