@@ -9,7 +9,7 @@
 - **Phase 1 — Foundation:** Implemented. Firebase SDK/config, Hosting, emulator configuration, default-deny-to-role-aware Firestore Rules, and CI are present. CI passed TypeScript typecheck, production build, and 11 Firestore Rules emulator tests on source commit `e9880239e2253d7a36ef4bfef32fb7025013d51f`.
 - **Phase 2 — Identity/workspace:** Core flow implemented: email/password and Google Auth, email verification required before workspace access, password reset email, first Admin workspace bootstrap, role from active membership, email-bound expiring invitations, and re-invitation for removed members in the same workspace. Complete member-management and account-recovery regression coverage still needs browser-level testing.
 - **Phase 3 — Incident domain:** Partial implementation: Firestore repositories, revision transactions, status transition checks, ID duplicate index, Trash/restore, audit/version subcollections, route-master batch import, and listeners exist. Full NOC feature parity and browser-level workflow regression remain. Progress currently lives inside incident documents and needs a size/retention strategy before larger production history is imported.
-- **Phase 4 — Spark replacements:** Partial. Firestore listeners and explicit Spark-unavailable adapter responses exist. Local offline draft and notification behavior still need full verification. Attachments, server-side AI, SMTP, background SLA, and advanced analytics are not implemented.
+- **Phase 4 — Spark replacements:** Partial. Firestore listeners and explicit Spark-unavailable adapter responses exist. Client-side SLA notices are implemented for the active app session: due-soon, overdue, L2, and L3 thresholds are evaluated locally, deduplicated per incident/update/stage, and surfaced through in-app toast or browser notifications when permission is granted and the tab is hidden. The clock rechecks on visibility return. This is not a background scheduler and cannot guarantee notices when the browser/app is closed or suspended. Local offline draft behavior still needs full verification. Attachments, server-side AI, SMTP, and advanced analytics are not implemented.
 - **Phase 5 — Pilot/cutover:** Not started. No AppDeploy export/import has occurred. Keep AppDeploy running and untouched.
 
 The passing CI run verifies the code at the cited source commit. Subsequent changes to the CI trigger configuration are documentation/workflow-only; rerun status for the current PR head is the authoritative latest check. A green CI does not certify data migration or production readiness.
@@ -59,7 +59,7 @@ The passing CI run verifies the code at the cited source commit. Subsequent chan
 ## Phase 4 — Spark-compatible feature replacements
 
 - Replace Socket.IO with Firestore listeners.
-- Replace server-computed SLA state with client-side calculations and in-app notices while the app is open.
+- [x] Replace server-computed SLA state with client-side calculations and in-app notices while the app is open (due-soon/overdue/L2/L3, deduplicated; active-tab/browser-permission only).
 - Replace server file uploads with local-only image processing and local IndexedDB drafts; shared file attachments remain disabled.
 - Replace server-side Gemini extraction with manual coordinate review/local processing. Do not expose a shared Gemini key in the client bundle.
 - Replace email/push sender workflows with in-app notifications. FCM may be reconsidered only when a trusted sender exists.
@@ -89,7 +89,7 @@ The passing CI run verifies the code at the cited source commit. Subsequent chan
 - History: audit creation, immutable snapshots, supervisor restore.
 - Route master: XLSX parsing, batch writes, import progress, workspace isolation.
 - Realtime: same-workspace update visible; cross-workspace update never visible.
-- SLA: active tab notices; correct handling of browser sleep/closed state (no background guarantee).
+- SLA: active-tab notices for due-soon/overdue/L2/L3 are implemented and unit-tested; visibility return refreshes the clock. Browser closed/suspended state has no background guarantee.
 - Offline: local draft persistence and conflict resolution on reconnect.
 - Quota discipline: bounded listeners, list pagination, request counters, batch limits.
 - Deployment: SPA routes resolve, Rules and indexes deploy, no Functions or Storage deploy target.
