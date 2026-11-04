@@ -38,6 +38,10 @@ jobs:
         working-directory: source
         run: npm install --no-audit --no-fund
 
+      - name: TypeScript typecheck
+        working-directory: source
+        run: npm run typecheck
+
       - name: Production build
         working-directory: source
         run: npm run build
