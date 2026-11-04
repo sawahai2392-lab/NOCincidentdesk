@@ -1,4 +1,5 @@
 import { validateWorkspaceBackupBundle, type WorkspaceBackupValidation } from './workspace-backup.ts';
+import { getWorkspaceRestorePolicy, type WorkspaceRestorePolicy } from './workspace-restore-policy.ts';
 
 export interface WorkspaceImportContext {
   workspaceId: string;
@@ -10,6 +11,7 @@ export interface WorkspaceImportDryRun {
   valid: boolean;
   eligibleForFutureImport: boolean;
   validation: WorkspaceBackupValidation;
+  restorePolicy: WorkspaceRestorePolicy;
   errors: string[];
   warnings: string[];
   conflicts: {
@@ -27,6 +29,7 @@ export function analyzeWorkspaceImport(
   context: WorkspaceImportContext,
 ): WorkspaceImportDryRun {
   const validation = validateWorkspaceBackupBundle(bundle);
+  const restorePolicy = getWorkspaceRestorePolicy();
   const errors = [...validation.errors];
   const warnings = [...validation.warnings];
   const conflicts = { memberIds: [] as string[], incidentIds: [] as string[] };
@@ -71,6 +74,7 @@ export function analyzeWorkspaceImport(
     valid,
     eligibleForFutureImport: valid,
     validation,
+    restorePolicy,
     errors,
     warnings,
     conflicts,
