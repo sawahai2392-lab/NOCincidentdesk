@@ -11,6 +11,7 @@ import { setRealtimeServer } from "./realtime.js";
 import { readStoredFile } from "./standalone-sdk.js";
 import { handler as legacyApi } from "../../backend/index.js";
 import { removeSubscriptionsByConnection } from "../../backend/realtime-subscribers.js";
+import { startStandaloneJobs } from "./jobs.js";
 
 const app = new Hono();
 
@@ -201,6 +202,13 @@ const socketServer = new SocketServer(server, {
 
 setRealtimeServer(socketServer);
 
+let backgroundJobs: Awaited<ReturnType<typeof startStandaloneJobs>> | null = null;
+void startStandaloneJobs().then((jobs) => {
+  backgroundJobs = jobs;
+}).catch((error: unknown) => {
+  console.error("background_jobs_start_failed", error instanceof Error ? error.message : "unknown");
+});
+
 socketServer.use(async (socket, next) => {
   try {
     const headers = new Headers();
@@ -237,9 +245,12 @@ socketServer.on("connection", (socket) => {
 
 const shutdown = (signal: string) => {
   console.log("noc_api_shutdown", { signal });
-  socketServer.close();
-  server.close(() => {
-    void pool.end().finally(() => process.exit(0));
+  socketServer.close(() => {
+    void (async () => {
+      if (backgroundJobs) await backgroundJobs.stop();
+      await pool.end();
+      process.exit(0);
+    })();
   });
 };
 
