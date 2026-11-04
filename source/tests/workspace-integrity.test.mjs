@@ -168,3 +168,18 @@ test('single active Admin and truncated history are warnings, not automatic repa
   assert.ok(report.findings.some((item) => item.id === 'coverage:partial'));
   assert.equal(report.repairs.length, 0);
 });
+
+test('does not classify unseen incident-key targets as orphan when incident scan is partial', () => {
+  const snapshot = createSnapshot({
+    incidents: [],
+    incidentsTruncated: true,
+    history: [],
+    incidentKeys: [
+      { id: 'tt001', data: { incidentId: 'incident-outside-page', normalizedKey: 'tt001', active: true } },
+    ],
+  });
+  const report = buildWorkspaceIntegrityReport(snapshot, 1000);
+  assert.equal(report.findings.some((item) => item.id === 'incident-key:orphan:tt001'), false);
+  assert.equal(report.repairs.some((item) => item.kind === 'delete-orphan-incident-key'), false);
+  assert.equal(report.coverage.partial, true);
+});
