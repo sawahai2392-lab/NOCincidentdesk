@@ -470,6 +470,9 @@ export async function softDeleteIncident(
       revision: current.revision + 1,
     };
     transaction.set(reference, next);
+    if (current.incidentId.trim()) {
+      transaction.delete(incidentKeyRef(workspaceId, current.incidentId));
+    }
     transaction.set(auditRef, {
       action: 'deleted',
       summary: 'Incident dipindahkan ke Trash',
@@ -496,6 +499,13 @@ export async function restoreIncident(
     if (!snapshot.exists()) throw new FirebaseRepositoryError('trashed_incident_not_found', 'Incident tidak ditemukan.');
     const current = { ...snapshot.data(), id: snapshot.id } as Incident;
     if (!current.deletedAt) throw new FirebaseRepositoryError('incident_not_in_trash', 'Incident tidak berada di Trash.');
+
+    const keyRef = current.incidentId.trim() ? incidentKeyRef(workspaceId, current.incidentId) : null;
+    const keySnapshot = keyRef ? await transaction.get(keyRef) : null;
+    if (keySnapshot?.exists() && keySnapshot.data().incidentId !== incidentId) {
+      throw new FirebaseRepositoryError('duplicate_incident_id', 'Incident ID sudah digunakan oleh incident lain.');
+    }
+
     const next = {
       ...current,
       deletedAt: 0,
@@ -505,7 +515,14 @@ export async function restoreIncident(
       updatedBy: user.uid,
       revision: current.revision + 1,
     };
-    transaction.set(reference, next);
+    transaction.set(reference, { ...next, normalizedIncidentId: normalizeKey(next.incidentId) });
+    if (keyRef) {
+      transaction.set(keyRef, {
+        incidentId,
+        normalizedKey: normalizeKey(next.incidentId),
+        active: true,
+      });
+    }
     transaction.set(auditRef, {
       action: 'restored',
       summary: 'Incident dipulihkan dari Trash',
