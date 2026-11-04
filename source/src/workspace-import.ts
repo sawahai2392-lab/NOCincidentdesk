@@ -1,4 +1,4 @@
-import { validateWorkspaceBackupBundle, type WorkspaceBackupValidation } from './workspace-backup';
+import { validateWorkspaceBackupBundle, type WorkspaceBackupValidation } from './workspace-backup.ts';
 
 export interface WorkspaceImportContext {
   workspaceId: string;
