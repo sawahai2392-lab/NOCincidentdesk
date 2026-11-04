@@ -97,3 +97,7 @@ jobs:
         working-directory: source
         run: npm run test:import
 
+      - name: Workspace restore policy tests
+        working-directory: source
+        run: npm run test:restore-policy
+
