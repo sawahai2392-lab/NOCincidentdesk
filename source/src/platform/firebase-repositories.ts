@@ -422,11 +422,15 @@ export async function saveIncident(
     const previousKeyRef = previousNormalized ? incidentKeyRef(workspaceId, current.incidentId) : null;
 
     let nextKeySnapshot = null;
+    let previousKeySnapshot = null;
     if (nextKeyRef && nextNormalized !== previousNormalized) {
       nextKeySnapshot = await transaction.get(nextKeyRef);
       if (nextKeySnapshot.exists() && nextKeySnapshot.data().incidentId !== value.id) {
         throw new FirebaseRepositoryError('duplicate_incident_id', 'Incident ID sudah digunakan.');
       }
+    }
+    if (previousKeyRef && previousNormalized !== nextNormalized) {
+      previousKeySnapshot = await transaction.get(previousKeyRef);
     }
 
     const fields = changedFields(current, next);
@@ -441,7 +445,7 @@ export async function saveIncident(
       actorName: user.displayName || user.email || 'NOC User',
       createdAt: now(),
     });
-    if (previousKeyRef && previousNormalized !== nextNormalized) transaction.delete(previousKeyRef);
+    if (previousKeyRef && previousKeySnapshot?.exists()) transaction.delete(previousKeyRef);
     if (nextKeyRef) transaction.set(nextKeyRef, { incidentId: value.id, normalizedKey: nextNormalized, active: true });
     return next;
   });
@@ -460,6 +464,10 @@ export async function softDeleteIncident(
     if (!snapshot.exists()) throw new FirebaseRepositoryError('incident_not_found', 'Incident tidak ditemukan.');
     const current = { ...snapshot.data(), id: snapshot.id } as Incident;
     if (current.deletedAt) throw new FirebaseRepositoryError('incident_already_in_trash', 'Incident sudah berada di Trash.');
+    const keyRef = current.incidentId.trim()
+      ? incidentKeyRef(workspaceId, current.incidentId)
+      : null;
+    const keySnapshot = keyRef ? await transaction.get(keyRef) : null;
     const next = {
       ...current,
       deletedAt: now(),
@@ -470,9 +478,7 @@ export async function softDeleteIncident(
       revision: current.revision + 1,
     };
     transaction.set(reference, next);
-    if (current.incidentId.trim()) {
-      transaction.delete(incidentKeyRef(workspaceId, current.incidentId));
-    }
+    if (keyRef && keySnapshot?.exists()) transaction.delete(keyRef);
     transaction.set(auditRef, {
       action: 'deleted',
       summary: 'Incident dipindahkan ke Trash',
@@ -551,6 +557,9 @@ export async function purgeIncident(workspaceId: string, incidentId: string): Pr
       'Incident memiliki metadata lampiran. Hapus atau ekspor lampiran terlebih dahulu.',
     );
   }
+  const keySnapshot = incident.incidentId.trim()
+    ? await getDoc(incidentKeyRef(workspaceId, incident.incidentId))
+    : null;
   const [audit, versions] = await Promise.all([
     getDocs(collection(firestore, auditPath(workspaceId, incidentId))),
     getDocs(collection(firestore, versionsPath(workspaceId, incidentId))),
@@ -559,7 +568,7 @@ export async function purgeIncident(workspaceId: string, incidentId: string): Pr
   audit.docs.forEach((item) => batch.delete(item.ref));
   versions.docs.forEach((item) => batch.delete(item.ref));
   batch.delete(reference);
-  if (incident.incidentId) batch.delete(incidentKeyRef(workspaceId, incident.incidentId));
+  if (keySnapshot?.exists()) batch.delete(keySnapshot.ref);
   await batch.commit();
 }
 
