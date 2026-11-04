@@ -36,6 +36,7 @@ import {
   subscribeToWorkspace,
   updateMemberRole,
   FirebaseRepositoryError,
+  normalizeIncidentSnapshot,
 } from './firebase-repositories';
 import type { Incident, Role } from '../domain';
 
@@ -144,12 +145,16 @@ async function getRequest(path: string): Promise<ApiResult> {
     const snapshot = await getDocs(
       query(collection(firestore, 'workspaces', profile.workspaceId, 'incidents'), limit(100)),
     );
-    const items = snapshot.docs.map((item) => ({ ...item.data(), id: item.id })) as Incident[];
+    const items = snapshot.docs.map((item) => normalizeIncidentSnapshot(item.data(), item.id));
     const incident = items.find((item) => item.id === decodeURIComponent(intelligenceMatch[1]));
     return ok({
       parent: incident?.parentIncidentId ? items.find((item) => item.id === incident.parentIncidentId) || null : null,
-      children: items.filter((item) => item.parentIncidentId === incident?.id),
+      parentMissing: Boolean(incident?.parentIncidentId && !items.some((item) => item.id === incident.parentIncidentId)),
+      children: incident ? items.filter((item) => item.parentIncidentId === incident.id) : [],
       related: [],
+      repeatCuts: [],
+      commonOutage: { detected: false, level: 'none', summary: '' },
+      scanned: snapshot.size,
       scanTruncated: snapshot.size >= 100,
     });
   }
@@ -285,8 +290,42 @@ async function postRequest(path: string, body: Record<string, unknown> = {}): Pr
     return ok({ updated: true, unreadCount: 0 });
   }
 
-  if (path === '/api/risk/forecast' || path === '/api/risk/context' || path === '/api/reliability') {
-    return ok({ items: [], forecast: [], context: [], trend: [], brief: 'Analitik lanjutan dinonaktifkan pada mode Firebase Spark-only.' });
+  if (path === '/api/reliability') {
+    const windowDays = Math.max(1, Number(body.windowDays) || 30);
+    return ok({
+      windowDays, generatedAt: Date.now(), scanned: 0, scanTruncated: false, missingOccur: 0,
+      summary: {
+        incidents: 0, resolvedSamples: 0, medianMttr: 0, p90Mttr: 0, repeatRate: 0,
+        repeatCount: 0, fingerprinted: 0,
+        severity: { Critical: 0, Major: 0, Minor: 0 }, status: {},
+        identity: { standard: 0, b2b: 0 }, closureQuality: 0, closureSamples: 0,
+      },
+      trend: [], rootCauses: [], systems: [], routes: [],
+      chronicCutPoints: { items: [], pointsScanned: 0, pointsTruncated: false },
+      closure: { score: 0, samples: 0, complete: 0, needsReview: 0 },
+      brief: 'Reliability Analytics lanjutan belum tersedia pada mode Firebase Spark-only.',
+      sparkLimitations: true,
+    });
+  }
+
+  if (path === '/api/risk/forecast') {
+    const horizonDays = Math.max(1, Number(body.horizonDays) || 7);
+    return ok({
+      generatedAt: Date.now(), horizonDays, historyDays: 90, scanned: 0, scanTruncated: false,
+      summary: { incidents90: 0, criticalWatch: 0, highWatch: 0, accelerating: 0, activeOverlaps: 0, signals: 0 },
+      pulse: [], signals: [], systems: [], routes: [],
+      brief: 'Risk Radar lanjutan belum tersedia pada mode Firebase Spark-only.',
+      sparkLimitations: true,
+    });
+  }
+
+  if (path === '/api/risk/context') {
+    return ok({
+      generatedAt: Date.now(), matchedBy: 'none', label: '', matches: 0,
+      risk: { name: '', type: '', score: 0, band: 'Insufficient data', confidence: 'low', incidentCount90: 0, last30: 0, last7: 0, critical30: 0, major30: 0, active: 0, acceleration: 0, medianGapDays: 0, daysSinceLast: 0, medianMttr: 0, latestAt: 0, cadenceTargetAt: 0, reasons: [] },
+      activeMatches: [], rootCauses: [], scanned: 0, scanTruncated: false, hasIdentity: false,
+      sparkLimitations: true,
+    });
   }
 
   throw new FirebaseApiError('endpoint_not_migrated', 'Endpoint belum dipindahkan ke Firestore: ' + path, 501);
