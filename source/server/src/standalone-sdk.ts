@@ -92,7 +92,7 @@ export const db = {
       for (const record of records) {
         const id = randomUUID();
         const payload = { ...record };
-        delete payload.id;
+        delete payload["id"];
         await client.query(
           `insert into legacy_documents (namespace, document_id, payload)
            values ($1, $2, $3::jsonb)`,
@@ -114,7 +114,7 @@ export const db = {
     const results: boolean[] = [];
     for (const update of updates) {
       const payload = { ...update.record };
-      delete payload.id;
+      delete payload["id"];
       const result = await pool.query(
         `update legacy_documents
             set payload = $3::jsonb, updated_at = now()
@@ -169,7 +169,7 @@ export function requireAuth(): RouteStep {
       userId: session.user.id,
       email: session.user.email || "",
       name: session.user.name || "",
-      picture: session.user.image || undefined
+      ...(session.user.image ? { picture: session.user.image } : {})
     };
     return null;
   };
@@ -226,11 +226,11 @@ export const invites = {
     context: Record<string, unknown>;
   }) {
     if (input.resourceType !== "workspace") throw new InviteError("invalid_invite_resource");
-    const workspaceId = asId(input.context.workspaceId);
+    const workspaceId = asId(input.context["workspaceId"]);
     if (!workspaceId) throw new InviteError("invalid_workspace_invite");
     const email = (input.allowList[0] || "").trim().toLowerCase();
     if (!email) throw new InviteError("invite_email_required");
-    const role = input.context.role === "supervisor" ? "supervisor" : "operator";
+    const role = input.context["role"] === "supervisor" ? "supervisor" : "operator";
     await pool.query(
       `insert into workspaces (id, name, owner_user_id)
        values ($1, 'NOC Workspace', $2)
@@ -449,14 +449,14 @@ export const notifications = {
         subscriptions.rows.map(async (row) => {
           try {
             await webpush.sendNotification(
-              row.subscription as webpush.PushSubscription,
+              row.subscription as unknown as webpush.PushSubscription,
               payload,
               { TTL: input.ttlSeconds || 3600 }
             );
           } catch (cause) {
             const statusCode = (cause as { statusCode?: number }).statusCode;
             if (statusCode === 404 || statusCode === 410) {
-              const endpoint = String(row.subscription.endpoint || "");
+              const endpoint = String(row.subscription["endpoint"] || "");
               if (endpoint) {
                 await pool.query(
                   "delete from web_push_subscriptions where endpoint = $1",
