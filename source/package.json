@@ -16,7 +16,8 @@
     "test:sla": "node --test tests/sla-notifications.test.mjs",
     "test:recovery": "node --test tests/incident-recovery.test.mjs tests/realtime-sync.test.mjs",
     "test:payload": "node --test tests/firestore-payload.test.mjs",
-    "test:pagination": "node --test tests/incident-pagination.test.mjs"
+    "test:pagination": "node --test tests/incident-pagination.test.mjs",
+    "test:usage": "node --test tests/firestore-usage.test.mjs"
   },
   "dependencies": {
     "@floating-ui/react": "^0.27.16",
