@@ -278,7 +278,7 @@ service cloud.firestore {
           allow create: if activeMember(workspaceId)
             && request.resource.data.keys().hasOnly([
               'action', 'summary', 'changedFields', 'fromRevision', 'toRevision',
-              'versionId', 'actorId', 'actorName', 'createdAt'
+              'versionId', 'sourceVersionId', 'actorId', 'actorName', 'createdAt'
             ])
             && request.resource.data.action is string
             && request.resource.data.summary is string
@@ -292,13 +292,23 @@ service cloud.firestore {
             && existsAfter(incidentPath(workspaceId, incidentId))
             && request.resource.data.toRevision == getAfter(incidentPath(workspaceId, incidentId)).data.revision
             && (
-              !('versionId' in request.resource.data)
-              || (
-                request.resource.data.action == 'snapshot_created'
-                && existsAfter(incidentVersionPath(workspaceId, incidentId, request.resource.data.versionId))
-                && getAfter(incidentVersionPath(workspaceId, incidentId, request.resource.data.versionId)).data.auditId == auditId
-                && getAfter(incidentVersionPath(workspaceId, incidentId, request.resource.data.versionId)).data.revision == request.resource.data.toRevision
-                && getAfter(incidentVersionPath(workspaceId, incidentId, request.resource.data.versionId)).data.createdAt == request.resource.data.createdAt
+              (
+                !('versionId' in request.resource.data)
+                || (
+                  request.resource.data.action == 'snapshot_created'
+                  && existsAfter(incidentVersionPath(workspaceId, incidentId, request.resource.data.versionId))
+                  && getAfter(incidentVersionPath(workspaceId, incidentId, request.resource.data.versionId)).data.auditId == auditId
+                  && getAfter(incidentVersionPath(workspaceId, incidentId, request.resource.data.versionId)).data.revision == request.resource.data.toRevision
+                  && getAfter(incidentVersionPath(workspaceId, incidentId, request.resource.data.versionId)).data.createdAt == request.resource.data.createdAt
+                )
+              )
+            && (
+                !('sourceVersionId' in request.resource.data)
+                || (
+                  request.resource.data.action == 'version_restored'
+                  && exists(incidentVersionPath(workspaceId, incidentId, request.resource.data.sourceVersionId))
+                  && get(incidentVersionPath(workspaceId, incidentId, request.resource.data.sourceVersionId)).data.incident.id == incidentId
+                )
               )
             );
           allow update: if false;
