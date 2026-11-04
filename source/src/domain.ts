@@ -165,6 +165,7 @@ export interface AuditEntry {
   actorName: string;
   createdAt: number;
   versionId?: string;
+  sourceVersionId?: string;
 }
 
 export interface IncidentVersion {
