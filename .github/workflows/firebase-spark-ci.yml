@@ -1,13 +1,10 @@
 name: Firebase Spark CI
 
 on:
-  push:
-    branches:
-      - feat/firebase-spark-migration
   pull_request:
     branches:
       - feat/tt-editor-quick-updates
-      - feat/firebase-spark-migration
+  workflow_dispatch:
 
 permissions:
   contents: read
