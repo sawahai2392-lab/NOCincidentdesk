@@ -36,6 +36,7 @@ import { analyzeWorkspaceImport } from './workspace-import';
 import { planSelectiveWorkspaceRestore } from './workspace-restore-plan';
 import { executeSelectiveWorkspaceRestore } from './workspace-restore-execution';
 import {
+    canCleanupStaleRouteMasterBatch,
     canReactivateRouteMasterBatch,
     getRestoreOperationDisplayStatus,
     restoreOperationStatusLabel,
@@ -1074,8 +1075,8 @@ function App() {
 <div className='master-db-copy'><div className='master-db-title-row'><strong>Staging cleanup</strong><Badge tone={(workspaceRestoreRecovery.recovery?.stagingBatches || []).some((batch: any) => batch.stale) ? 'warning' : 'success'}>{(workspaceRestoreRecovery.recovery?.stagingBatches || []).filter((batch: any) => batch.stale).length} stale</Badge></div><p>Hanya batch berstatus staging yang tidak memiliki aktivitas selama minimal 24 jam yang dapat dibersihkan.</p>
 <div className='restore-recovery-list'>
 {(workspaceRestoreRecovery.recovery?.stagingBatches || []).length ? workspaceRestoreRecovery.recovery.stagingBatches.map((batch: any) => <div className='restore-recovery-row' key={batch.id}>
-<div><strong>{batch.id}</strong><small>Terakhir aktif: {batch.lastActivityAt ? new Date(batch.lastActivityAt).toLocaleString('id-ID') : 'Waktu tidak tersedia'}</small><small>{batch.stale ? 'Tidak aktif ≥ 24 jam' : 'Masih dalam masa aman'}</small></div>
-{batch.stale ? <Button variant='secondary' className='restore-recovery-action danger-action' disabled={workspaceRestoreRecoveryBusy || Boolean(workspaceRestoreRecoveryAction)} onClick={() => void cleanupStaleRouteMaster(batch)}>{workspaceRestoreRecoveryAction === batch.id ? 'Memproses…' : 'Bersihkan'}</Button> : <Badge tone='muted'>Dipertahankan</Badge>}
+<div><strong>{batch.id}</strong><small>Terakhir aktif: {batch.lastActivityAt ? new Date(batch.lastActivityAt).toLocaleString('id-ID') : 'Waktu tidak tersedia'}</small><small>{batch.stale ? 'Tidak aktif ≥ 24 jam' : 'Masih dalam masa aman'}{batch.cleanupSupported === false ? ' · Jumlah chunk melewati batas cleanup otomatis' : ''}</small></div>
+{canCleanupStaleRouteMasterBatch(batch, workspaceRestoreRecovery.recovery?.activeBatchId || null) ? <Button variant='secondary' className='restore-recovery-action danger-action' disabled={workspaceRestoreRecoveryBusy || Boolean(workspaceRestoreRecoveryAction)} onClick={() => void cleanupStaleRouteMaster(batch)}>{workspaceRestoreRecoveryAction === batch.id ? 'Memproses…' : 'Bersihkan'}</Button> : batch.stale && batch.cleanupSupported === false ? <Badge tone='warning'>Manual review · 50+ chunk</Badge> : <Badge tone='muted'>Dipertahankan</Badge>}
 </div>) : <small>Tidak ada staging batch yang perlu ditinjau.</small>}
 </div>
 {workspaceRestoreRecovery.recovery?.stagingScanTruncated && <small>Hasil staging dibatasi 100 batch. Refresh atau lakukan pemeriksaan lanjutan jika jumlah batch melebihi batas ini.</small>}
