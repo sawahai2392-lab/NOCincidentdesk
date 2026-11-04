@@ -822,10 +822,11 @@ export async function exportWorkspaceBackup(workspaceId: string, user: User): Pr
     const rows: Array<Record<string, unknown> & { id: string }> = [];
     let cursor: QueryDocumentSnapshot<DocumentData> | null = null;
     while (true) {
-      const constraints = cursor
-        ? [orderBy(documentId()), startAfter(cursor), limit(400)]
-        : [orderBy(documentId()), limit(400)];
-      const snapshot = await getDocs(query(collection(firestore, path), ...constraints));
+      const reference = collection(firestore, path);
+      const pageQuery = cursor
+        ? query(reference, orderBy(documentId()), startAfter(cursor), limit(400))
+        : query(reference, orderBy(documentId()), limit(400));
+      const snapshot = await getDocs(pageQuery);
       rows.push(...snapshot.docs.map((item) => ({ ...item.data(), id: item.id })));
       if (snapshot.size < 400) break;
       cursor = snapshot.docs[snapshot.docs.length - 1];
