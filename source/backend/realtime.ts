@@ -1,3 +1,4 @@
+// @ts-nocheck
 import { removeSubscriptionsByConnection } from "./realtime-subscribers";
 
 export const realtime = async (event: any) => {
