@@ -96,6 +96,8 @@ function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === 'object' && value !== null && !Array.isArray(value);
 }
 
+export const MAX_WORKSPACE_SETTINGS_DOCUMENT_BYTES = 900 * 1024;
+
 export function readWorkspaceRestoreSettings(value: unknown): WorkspaceRestoreSettings | null {
   if (!isRecord(value)) return null;
   const result: Record<string, unknown> = {};
@@ -109,6 +111,7 @@ export function readWorkspaceRestoreSettings(value: unknown): WorkspaceRestoreSe
     if (typeof number !== 'number' || !Number.isFinite(number) || number < 1 || number > 1440) return null;
     result[field] = number;
   }
+  if (new TextEncoder().encode(JSON.stringify(result)).byteLength > MAX_WORKSPACE_SETTINGS_DOCUMENT_BYTES) return null;
   return result as unknown as WorkspaceRestoreSettings;
 }
 
@@ -240,6 +243,7 @@ export async function executeSelectiveWorkspaceRestore(
       emit(dependencies, 'committing-route-master', 0, 1, 'Mengalihkan pointer ke batch Route Master baru.');
       const metadata = {
         totalCount: routeMaster.length,
+        expectedFingerprint,
         expectedCurrentBatchId,
         fileName: `Backup restore · ${(input.sourceFileName || 'workspace backup').slice(0, 180)}`,
         sheetName: 'Route Master backup',
