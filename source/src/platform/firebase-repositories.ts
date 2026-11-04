@@ -1324,6 +1324,7 @@ export async function applyWorkspaceIntegrityRepairs(
   const operations: Array<Record<string, unknown>> = [];
 
   for (const operation of requested) {
+    let operationStatus = 'skipped';
     try {
       if (operation.kind === 'create-incident-key') {
         const incidentId = String(operation.incidentId || '').trim();
@@ -1357,6 +1358,7 @@ export async function applyWorkspaceIntegrityRepairs(
         });
         if (outcome === 'applied') applied += 1;
         else skipped += 1;
+        operationStatus = outcome;
       } else if (operation.kind === 'delete-orphan-incident-key') {
         const keyId = String(operation.keyId || '').trim();
         const incidentId = String(operation.incidentId || '').trim();
