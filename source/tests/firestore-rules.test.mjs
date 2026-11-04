@@ -349,22 +349,29 @@ test('audit entries are append-only and must match the resulting incident revisi
     email_verified: true,
   }).firestore();
   const auditRef = doc(db, 'workspaces/workspace-a/incidents/incident-a/audit/audit-1');
-  await assertSucceeds(setDoc(auditRef, {
+  const updateBatch = writeBatch(db);
+  updateBatch.update(doc(db, 'workspaces/workspace-a/incidents/incident-a'), {
+    updatedBy: 'operator-a',
+    updatedAt: 2,
+    revision: 2,
+  });
+  updateBatch.set(auditRef, {
     action: 'updated',
     summary: 'Operator update',
     changedFields: ['internalNotes'],
     fromRevision: 1,
-    toRevision: 1,
+    toRevision: 2,
     actorId: 'operator-a',
     actorName: 'Operator A',
     createdAt: 2,
-  }));
+  });
+  await assertSucceeds(updateBatch.commit());
   await assertFails(setDoc(doc(db, 'workspaces/workspace-a/incidents/incident-a/audit/audit-orphan'), {
     action: 'updated',
     summary: 'Wrong revision',
     changedFields: ['internalNotes'],
     fromRevision: 1,
-    toRevision: 2,
+    toRevision: 3,
     actorId: 'operator-a',
     actorName: 'Operator A',
     createdAt: 3,
