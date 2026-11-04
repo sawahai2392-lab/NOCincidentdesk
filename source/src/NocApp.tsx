@@ -166,7 +166,8 @@ function App() {
     const [masterSheetName, setMasterSheetName] = useState('');
     const [systemKeyColumn, setSystemKeyColumn] = useState('H');
     const [routeSegmentColumn, setRouteSegmentColumn] = useState('A');
-    const [masterImportBusy, setMasterImportBusy] = useState(false);\n    const [workspaceExportBusy, setWorkspaceExportBusy] = useState(false);
+    const [masterImportBusy, setMasterImportBusy] = useState(false);
+    const [workspaceExportBusy, setWorkspaceExportBusy] = useState(false);
     const [masterImportProgress, setMasterImportProgress] = useState(0);
     const [versions, setVersions] = useState<IncidentVersion[]>([]);
     const [historyOpen, setHistoryOpen] = useState(false);
