@@ -242,7 +242,7 @@ async function postRequest(path: string, body: Record<string, unknown> = {}): Pr
     const incidentId = decodeURIComponent(versionMatch[1]);
     const target = await getDoc(doc(firestore, 'workspaces', profile.workspaceId, 'incidents', incidentId));
     if (!target.exists()) throw new FirebaseApiError('incident_not_found', 'Incident tidak ditemukan.', 404);
-    const incident = { ...target.data(), id: incidentId } as Incident;
+    const incident = normalizeIncidentSnapshot(target.data(), incidentId);
     await createVersion(profile.workspaceId, user, incident, String(body.label || 'Manual snapshot'));
     return ok({ created: true });
   }
