@@ -1,0 +1,11 @@
+rules_version = '2';
+
+service cloud.firestore {
+  match /databases/{database}/documents {
+    // Default-deny while the workspace model and role rules are implemented.
+    // Never deploy permissive test rules to the production Firebase project.
+    match /{document=**} {
+      allow read, write: if false;
+    }
+  }
+}
