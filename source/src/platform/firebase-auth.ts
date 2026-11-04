@@ -6,6 +6,7 @@ import {
   setPersistence,
   signInWithEmailAndPassword,
   signInWithPopup,
+  sendPasswordResetEmail,
   signOut,
   updateProfile,
   type User,
@@ -48,6 +49,11 @@ export async function signInWithEmail(email: string, password: string): Promise<
   await ensurePersistence();
   const result = await signInWithEmailAndPassword(firebaseAuth, email.trim(), password);
   return mapAuthUser(result.user)!;
+}
+
+export async function requestPasswordReset(email: string): Promise<void> {
+  await ensurePersistence();
+  await sendPasswordResetEmail(firebaseAuth, email.trim());
 }
 
 export async function registerWithEmail(
