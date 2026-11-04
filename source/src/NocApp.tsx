@@ -597,17 +597,25 @@ function App() {
         setWorkspaceRestoreResult(null);
         setWorkspaceRestoreProgress({ stage: 'validating', completed: 0, total: 1, message: 'Memvalidasi pilihan restore.' });
         try {
+            const currentSettingsResponse = workspaceRestoreSelection.settings
+                ? await api.get('/api/settings')
+                : null;
+            const currentSettings = currentSettingsResponse?.data?.settings || data.settings;
             const result = await executeSelectiveWorkspaceRestore({
                 bundle: workspaceImportBundle,
                 preflight: workspaceImportReport,
                 selection: workspaceRestoreSelection,
                 role: data.profile.role,
                 confirmed: true,
-                currentSettings: data.settings,
+                currentSettings,
                 sourceFileName: workspaceImportFileName,
             }, {
-                saveSettings: async (settings) => {
-                    await api.put('/api/settings', settings);
+                saveSettings: async (settings, expectedUpdatedAt) => {
+                    const response = await api.put('/api/settings', {
+                        ...settings,
+                        _expectedUpdatedAt: expectedUpdatedAt,
+                    });
+                    return { updatedAt: Number(response.data.settings?.updatedAt) || 0 };
                 },
                 startRouteMasterImport: async () => {
                     const response = await api.post('/api/route-master/import/start');
@@ -655,7 +663,7 @@ function App() {
             setWorkspaceRestoreBusy(false);
         }
     }
-    async function saveSettings() { try { const response = await api.put('/api/settings', settingsDraft); const saved = response.data.settings as SettingsData; setData(current => current ? { ...current, settings: saved } : current); setSettingsDraft(clone(saved)); notify('Master data diperbarui.', 'success'); } catch (err) { notify(errorMessage(err), 'error'); } }
+    async function saveSettings() { try { const response = await api.put('/api/settings', { ...settingsDraft, _expectedUpdatedAt: Number(data?.settings?.updatedAt) || 0 }); const saved = response.data.settings as SettingsData; setData(current => current ? { ...current, settings: saved } : current); setSettingsDraft(clone(saved)); notify('Master data diperbarui.', 'success'); } catch (err) { notify(errorMessage(err), 'error'); } }
     function selectMasterSheet(sheetName: string) { if (!masterBuffer) return; try { const workbook = parseWorkbookSheet(masterBuffer, sheetName); const detected = detectSheetHeaders(workbook, sheetName); setMasterWorkbook(workbook); setMasterSheetName(sheetName); setMasterRowCount(worksheetRowCount(workbook, sheetName)); setSystemKeyColumn(detected.systemKeyColumn || 'H'); setRouteSegmentColumn(detected.routeSegmentColumn || 'A'); } catch (err) { notify(`Worksheet ${sheetName} gagal dibaca: ${errorMessage(err)}`, 'error'); } }
     async function readMasterExcel(event: ChangeEvent<HTMLInputElement>) { const file = event.target.files?.[0]; event.target.value = ''; if (!file) return; setMasterImportBusy(true); setMasterImportProgress(0); try { const buffer = await file.arrayBuffer(); let directory: WorkBook; try { directory = read(buffer, { type: 'array', bookSheets: true, bookDeps: false, cellFormula: false, cellHTML: false, WTF: false }); } catch (err) { throw new Error(`Tahap buka workbook gagal: ${errorMessage(err)}`); } if (!directory.SheetNames.length) throw new Error('Workbook tidak memiliki worksheet.'); const sheetName = chooseInitialMasterSheet(directory.SheetNames); let workbook: WorkBook; try { workbook = parseWorkbookSheet(buffer, sheetName); } catch (err) { throw new Error(`Tahap baca worksheet ${sheetName} gagal: ${errorMessage(err)}`); } const detected = detectSheetHeaders(workbook, sheetName); const systemColumn = detected.systemKeyColumn || 'H'; const routeColumn = detected.routeSegmentColumn || 'A'; const previewPairs = extractRouteMasterPairs(workbook, sheetName, systemColumn, routeColumn); if (!previewPairs.length && /^foa active$/i.test(sheetName.trim())) throw new Error(`Worksheet ${sheetName} terbaca, tetapi pasangan ${systemColumn} ↔ ${routeColumn} kosong. Untuk file FOA Mandau gunakan System Key H dan Segment Route A.`); setMasterBuffer(buffer); setMasterSheetNames(directory.SheetNames); setMasterWorkbook(workbook); setMasterFileName(file.name); setMasterSheetName(sheetName); setSystemKeyColumn(systemColumn); setRouteSegmentColumn(routeColumn); setMasterRowCount(worksheetRowCount(workbook, sheetName)); setMasterImportOpen(true); } catch (err) { notify(errorMessage(err), 'error'); } finally { setMasterImportBusy(false); } }
     async function importRouteMaster() { if (!masterImportPairs.length) { notify('Tidak ada pasangan System Key dan Segment Route yang terbaca.', 'error'); return; } if (masterImportPairs.length > 20000) { notify('Master data dibatasi maksimal 20.000 mapping per workspace.', 'error'); return; } setMasterImportBusy(true); setMasterImportProgress(2); try { const start = await api.post('/api/route-master/import/start'); const batchId = String(start.data.batchId || ''); const chunkSize = 400; if (!batchId) throw new Error('Gagal memulai import master data.'); for (let offset = 0; offset < masterImportPairs.length; offset += chunkSize) { const items = masterImportPairs.slice(offset, offset + chunkSize); await api.post('/api/route-master/import/chunk', { batchId, chunkIndex: Math.floor(offset / chunkSize), items }); setMasterImportProgress(Math.min(92, Math.round(((offset + items.length) / masterImportPairs.length) * 90))); } await api.post('/api/route-master/import/commit', { batchId, totalCount: masterImportPairs.length, fileName: masterFileName, sheetName: masterSheetName, systemKeyColumn: systemKeyColumn.toUpperCase(), routeSegmentColumn: routeSegmentColumn.toUpperCase() }); setMasterImportProgress(100); await loadRouteMaster(); setMasterImportOpen(false); notify(`${masterImportPairs.length.toLocaleString('id-ID')} mapping berhasil disimpan ke database online.`, 'success'); } catch (err) { notify(errorMessage(err), 'error'); } finally { setMasterImportBusy(false); } }
