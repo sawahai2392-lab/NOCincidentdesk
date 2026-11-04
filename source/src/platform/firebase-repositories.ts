@@ -421,7 +421,7 @@ export async function saveIncident(
       throw new FirebaseRepositoryError('workspace_membership_missing', 'Keanggotaan workspace tidak aktif.');
     }
 
-    const current = { ...currentSnapshot.data(), id: currentSnapshot.id } as Incident;
+    const current = normalizeIncidentSnapshot(currentSnapshot.data(), currentSnapshot.id);
     if (current.deletedAt) {
       throw new FirebaseRepositoryError('incident_in_trash', 'Incident berada di Trash.');
     }
@@ -488,7 +488,7 @@ export async function softDeleteIncident(
   return runTransaction(firestore, async (transaction) => {
     const snapshot = await transaction.get(reference);
     if (!snapshot.exists()) throw new FirebaseRepositoryError('incident_not_found', 'Incident tidak ditemukan.');
-    const current = { ...snapshot.data(), id: snapshot.id } as Incident;
+    const current = normalizeIncidentSnapshot(snapshot.data(), snapshot.id);
     if (current.deletedAt) throw new FirebaseRepositoryError('incident_already_in_trash', 'Incident sudah berada di Trash.');
     const keyRef = current.incidentId.trim()
       ? incidentKeyRef(workspaceId, current.incidentId)
@@ -529,7 +529,7 @@ export async function restoreIncident(
   return runTransaction(firestore, async (transaction) => {
     const snapshot = await transaction.get(reference);
     if (!snapshot.exists()) throw new FirebaseRepositoryError('trashed_incident_not_found', 'Incident tidak ditemukan.');
-    const current = { ...snapshot.data(), id: snapshot.id } as Incident;
+    const current = normalizeIncidentSnapshot(snapshot.data(), snapshot.id);
     if (!current.deletedAt) throw new FirebaseRepositoryError('incident_not_in_trash', 'Incident tidak berada di Trash.');
 
     const keyRef = current.incidentId.trim() ? incidentKeyRef(workspaceId, current.incidentId) : null;
@@ -573,7 +573,7 @@ export async function purgeIncident(workspaceId: string, incidentId: string): Pr
   const reference = doc(firestore, incidentsPath(workspaceId), incidentId);
   const snapshot = await getDoc(reference);
   if (!snapshot.exists()) return;
-  const incident = snapshot.data() as Incident;
+  const incident = normalizeIncidentSnapshot(snapshot.data(), incidentId);
   if (!incident.deletedAt) {
     throw new FirebaseRepositoryError('incident_must_be_trashed', 'Pindahkan incident ke Trash sebelum menghapus permanen.');
   }
@@ -605,7 +605,7 @@ export async function duplicateIncident(
 ): Promise<Incident> {
   const snapshot = await getDoc(doc(firestore, incidentsPath(workspaceId), sourceId));
   if (!snapshot.exists()) throw new FirebaseRepositoryError('incident_not_found', 'Incident tidak ditemukan.');
-  const source = { ...snapshot.data(), id: snapshot.id } as Incident;
+  const source = normalizeIncidentSnapshot(snapshot.data(), snapshot.id);
   const copy: Partial<Incident> = {
     ...source,
     id: undefined,
@@ -665,12 +665,9 @@ export async function restoreVersion(
   const version = versionSnapshot.data() as IncidentVersion;
   const currentSnapshot = await getDoc(doc(firestore, incidentsPath(workspaceId), incidentId));
   if (!currentSnapshot.exists()) throw new FirebaseRepositoryError('incident_not_found', 'Incident tidak ditemukan.');
-  const current = { ...currentSnapshot.data(), id: incidentId } as Incident;
-  const restored = {
-    ...version.incident,
-    id: incidentId,
-    revision: current.revision,
-  } as Incident;
+  const current = normalizeIncidentSnapshot(currentSnapshot.data(), incidentId);
+  const versionIncident = normalizeIncidentSnapshot(version.incident as unknown as DocumentData, incidentId);
+  const restored = { ...versionIncident, id: incidentId, revision: current.revision };
   return saveIncident(workspaceId, user, restored);
 }
 
