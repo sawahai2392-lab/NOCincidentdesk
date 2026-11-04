@@ -875,9 +875,20 @@ export async function getWorkspaceRestoreRecovery(
     ? meta.currentBatchId
     : null;
   const currentTime = now();
-  const stagingBatches = stagingSnapshot.docs.map((snapshot) => {
+  const stagingBatches = await Promise.all(stagingSnapshot.docs.map(async (snapshot) => {
     const data = snapshot.data();
-    const lastActivityAt = Number(data.lastActivityAt) || Number(data.createdAt) || 0;
+    const chunks = await getDocs(query(
+      collection(firestore, workspacePath(workspaceId) + '/routeMasterBatches/' + snapshot.id + '/chunks'),
+      orderBy('chunkIndex', 'asc'),
+      limit(50),
+    ));
+    const latestChunkActivityAt = chunks.docs.reduce((latest, chunk) =>
+      Math.max(latest, Number(chunk.data().createdAt) || 0), 0);
+    const lastActivityAt = Math.max(
+      Number(data.lastActivityAt) || 0,
+      Number(data.createdAt) || 0,
+      latestChunkActivityAt,
+    );
     return {
       ...data,
       id: snapshot.id,
@@ -886,7 +897,7 @@ export async function getWorkspaceRestoreRecovery(
         && lastActivityAt > 0
         && currentTime - lastActivityAt >= STALE_ROUTE_MASTER_BATCH_MS,
     };
-  }).sort((left, right) => left.lastActivityAt - right.lastActivityAt);
+  })).sort((left, right) => left.lastActivityAt - right.lastActivityAt);
   const committedBatches = committedSnapshot.docs.map((snapshot) => ({
     ...snapshot.data(),
     id: snapshot.id,
@@ -1245,12 +1256,13 @@ export async function addRouteMasterChunk(
   }
   const batchRef = doc(firestore, workspacePath(workspaceId) + '/routeMasterBatches', batchId);
   const chunkRef = doc(firestore, workspacePath(workspaceId) + '/routeMasterBatches/' + batchId + '/chunks', String(chunkIndex).padStart(4, '0'));
-  const activityAt = now();
   await runTransaction(firestore, async (transaction) => {
     const batchSnapshot = await transaction.get(batchRef);
     if (!batchSnapshot.exists() || batchSnapshot.data().status !== 'staging') {
       throw new FirebaseRepositoryError('route_master_staging_not_found', 'Batch staging tidak tersedia atau sudah tidak menerima chunk.');
     }
+    // Always advance the heartbeat, even when two writes land in the same millisecond.
+    const activityAt = Math.max(now(), (Number(batchSnapshot.data().lastActivityAt) || 0) + 1);
     transaction.set(chunkRef, {
       chunkIndex,
       items,
@@ -1333,6 +1345,13 @@ export async function commitRouteMasterImport(
     ...publicMetadata
   } = metadata;
 
+  const initialBatchSnapshot = await getDoc(batchRef);
+  if (!initialBatchSnapshot.exists() || initialBatchSnapshot.data().status !== 'staging') {
+    throw new FirebaseRepositoryError('route_master_staging_not_found', 'Batch staging Route Master sudah tidak tersedia.');
+  }
+  const initialActivityAt = Number(initialBatchSnapshot.data().lastActivityAt)
+    || Number(initialBatchSnapshot.data().createdAt)
+    || 0;
   const stagedChunkRefs = await getDocs(chunksQuery);
   await runTransaction(firestore, async (transaction) => {
     // The web SDK transaction API reads document references, not queries.
@@ -1345,6 +1364,12 @@ export async function commitRouteMasterImport(
     const latestChunks = await Promise.all(stagedChunkRefs.docs.map((item) => transaction.get(item.ref)));
     if (!latestBatch.exists() || latestBatch.data().status !== 'staging') {
       throw new FirebaseRepositoryError('route_master_staging_not_found', 'Batch staging Route Master sudah tidak tersedia.');
+    }
+    const latestActivityAt = Number(latestBatch.data().lastActivityAt)
+      || Number(latestBatch.data().createdAt)
+      || 0;
+    if (latestActivityAt !== initialActivityAt) {
+      throw new FirebaseRepositoryError('route_master_conflict', 'Batch Route Master menerima perubahan setelah verifikasi awal. Ulangi verifikasi sebelum commit.');
     }
 
     const validation = validateRouteMasterChunkSet(
