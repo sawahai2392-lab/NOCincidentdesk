@@ -494,34 +494,41 @@ export const ws = {
           const data = kind === 'incident.deleted'
             ? { kind, id: incident.id, incident }
             : { kind, incident };
+          if (closed) return;
           callbacks.forEach((callback) => callback({
             type: 'entity.update',
             payload: { entity_type: 'workspace', entity_id: profile.workspaceId, data },
           }));
         },
-        (settings) => callbacks.forEach((callback) => callback({
+        (settings) => {
+          if (closed) return;
+          callbacks.forEach((callback) => callback({
           type: 'entity.update',
           payload: {
             entity_type: 'workspace',
             entity_id: profile.workspaceId,
             data: { kind: 'settings.saved', settings },
           },
-        })),
-        () => callbacks.forEach((callback) => callback({
+          }));
+        },
+        () => {
+          if (closed) return;
+          callbacks.forEach((callback) => callback({
           type: 'entity.update',
           payload: {
             entity_type: 'workspace',
             entity_id: profile.workspaceId,
             data: { kind: 'member.saved' },
           },
-        })),
+          }));
+        },
       );
       if (closed) unsubscribe();
     })();
     return {
       ready,
       connectionId: null as string | null,
-      onMessage(callback: (message: unknown) => void) { callbacks.push(callback); },
+      onMessage(callback: (message: unknown) => void) { if (!closed) callbacks.push(callback); },
       disconnect() {
         closed = true;
         unsubscribe?.();
