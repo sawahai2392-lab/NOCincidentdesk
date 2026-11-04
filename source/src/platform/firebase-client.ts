@@ -4,6 +4,7 @@ import {
   getCurrentIdToken,
   getCurrentNocUser,
   registerWithEmail,
+  requestPasswordReset,
   signInWithEmail,
   signInWithGoogle,
   signOutCurrentUser,
@@ -371,6 +372,7 @@ export const auth = {
   async registerWithEmail(name: string, email: string, password: string) {
     return { user: await registerWithEmail(name, email, password) };
   },
+  requestPasswordReset,
   getUser: getCurrentNocUser,
   getAccessToken: getCurrentIdToken,
   signOut: signOutCurrentUser,
