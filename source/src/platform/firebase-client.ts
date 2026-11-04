@@ -25,6 +25,9 @@ import {
   getRouteMaster,
   getWorkspaceRestoreOperations,
   getWorkspaceRestoreRecovery,
+  getWorkspaceIntegrityHistory,
+  scanWorkspaceIntegrity,
+  applyWorkspaceIntegrityRepairs,
   getWorkspaceSettings,
   joinWorkspace,
   loadIncidentPage,
@@ -48,6 +51,7 @@ import {
   normalizeIncidentSnapshot,
 } from './firebase-repositories';
 import type { Incident, Role } from '../domain';
+import type { WorkspaceIntegrityRepair } from '../workspace-integrity';
 
 type ApiResult<T = unknown> = { data: T };
 
@@ -144,6 +148,16 @@ async function getRequest(path: string): Promise<ApiResult> {
     return ok({ recovery, operations });
   }
 
+  if (path === '/api/workspace-integrity/scan') {
+    const { profile, user } = await context();
+    return ok(await scanWorkspaceIntegrity(profile.workspaceId, user));
+  }
+
+  if (path === '/api/workspace-integrity/history') {
+    const { profile, user } = await context();
+    return ok({ history: await getWorkspaceIntegrityHistory(profile.workspaceId, user) });
+  }
+
   if (path === '/api/integrations/gemini/status') {
     return ok({ configured: false, provider: 'Google Gemini', model: 'disabled-on-spark' });
   }
@@ -213,6 +227,12 @@ async function postRequest(path: string, body: Record<string, unknown> = {}): Pr
     return ok({ joined: true });
   }
   const { profile } = await context();
+
+  if (path === '/api/workspace-integrity/repair') {
+    if (!user) throw new FirebaseApiError('auth_required', 'Silakan masuk terlebih dahulu.', 401);
+    const operations = Array.isArray(body.operations) ? body.operations as WorkspaceIntegrityRepair[] : [];
+    return ok(await applyWorkspaceIntegrityRepairs(profile.workspaceId, user, operations));
+  }
 
   if (path === '/api/incidents') {
     if (!user) throw new FirebaseApiError('auth_required', 'Silakan masuk terlebih dahulu.', 401);

@@ -30,6 +30,11 @@ import {
   type RestoreOperationKind,
   type RestoreOperationStatus,
 } from '../workspace-restore-recovery';
+import {
+  buildWorkspaceIntegrityReport,
+  type WorkspaceIntegrityRepair,
+  type WorkspaceIntegritySnapshot,
+} from '../workspace-integrity';
 import { isFirestoreIncidentPayloadSafe, measureFirestoreDocumentBytes, MAX_FIRESTORE_INCIDENT_DOCUMENT_BYTES } from '../firestore-payload';
 import {
   defaultSettings,
@@ -1162,6 +1167,256 @@ export async function getWorkspaceRestoreOperations(
     limit(30),
   ));
   return snapshot.docs.map((item) => ({ ...item.data(), id: item.id }));
+}
+
+const WORKSPACE_INTEGRITY_MAX_MEMBERS = 200;
+const WORKSPACE_INTEGRITY_MAX_INCIDENTS = 100;
+const WORKSPACE_INTEGRITY_MAX_KEYS = 300;
+const WORKSPACE_INTEGRITY_HISTORY_INCIDENTS = 15;
+const WORKSPACE_INTEGRITY_HISTORY_ROWS = 50;
+const WORKSPACE_INTEGRITY_MAX_REPAIRS = 50;
+
+export async function getWorkspaceIntegrityHistory(
+  workspaceId: string,
+  user: User,
+): Promise<Array<Record<string, unknown> & { id: string }>> {
+  await assertWorkspaceAdmin(workspaceId, user);
+  const snapshot = await getDocs(query(
+    collection(firestore, workspacePath(workspaceId) + '/integrityRuns'),
+    orderBy('createdAt', 'desc'),
+    limit(20),
+  ));
+  return snapshot.docs.map((item) => ({ ...item.data(), id: item.id }));
+}
+
+export async function scanWorkspaceIntegrity(
+  workspaceId: string,
+  user: User,
+): Promise<{
+  report: ReturnType<typeof buildWorkspaceIntegrityReport> & { runId: string };
+  history: Array<Record<string, unknown> & { id: string }>;
+}> {
+  await assertWorkspaceAdmin(workspaceId, user);
+  const base = workspacePath(workspaceId);
+  const [workspaceSnapshot, memberSnapshot, settingsSnapshot, incidentSnapshot, keySnapshot, metaSnapshot, operationsSnapshot] = await Promise.all([
+    getDoc(doc(firestore, base)),
+    getDocs(query(collection(firestore, base + '/members'), orderBy(documentId(), 'asc'), limit(WORKSPACE_INTEGRITY_MAX_MEMBERS))),
+    getDoc(doc(firestore, settingsPath(workspaceId))),
+    getDocs(query(collection(firestore, incidentsPath(workspaceId)), orderBy(documentId(), 'asc'), limit(WORKSPACE_INTEGRITY_MAX_INCIDENTS))),
+    getDocs(query(collection(firestore, base + '/incidentKeys'), orderBy(documentId(), 'asc'), limit(WORKSPACE_INTEGRITY_MAX_KEYS))),
+    getDoc(doc(firestore, base + '/routeMasterMeta/main')),
+    getDocs(query(collection(firestore, base + '/restoreOperations'), orderBy('createdAt', 'desc'), limit(30))),
+  ]);
+
+  const incidentTargets = incidentSnapshot.docs.slice(0, WORKSPACE_INTEGRITY_HISTORY_INCIDENTS);
+  const history = await Promise.all(incidentTargets.map(async (incident) => {
+    const incidentPath = incidentsPath(workspaceId) + '/' + incident.id;
+    const [auditSnapshot, versionSnapshot] = await Promise.all([
+      getDocs(query(collection(firestore, incidentPath + '/audit'), orderBy('createdAt', 'desc'), limit(WORKSPACE_INTEGRITY_HISTORY_ROWS))),
+      getDocs(query(collection(firestore, incidentPath + '/versions'), orderBy('createdAt', 'desc'), limit(WORKSPACE_INTEGRITY_HISTORY_ROWS))),
+    ]);
+    return {
+      incidentId: incident.id,
+      audit: auditSnapshot.docs.map((item) => ({ id: item.id, data: item.data() })),
+      versions: versionSnapshot.docs.map((item) => ({ id: item.id, data: item.data() })),
+      auditTruncated: auditSnapshot.size >= WORKSPACE_INTEGRITY_HISTORY_ROWS,
+      versionsTruncated: versionSnapshot.size >= WORKSPACE_INTEGRITY_HISTORY_ROWS,
+    };
+  }));
+
+  const meta = metaSnapshot.exists() ? metaSnapshot.data() : null;
+  const activeBatchId = typeof meta?.currentBatchId === 'string' ? meta.currentBatchId : '';
+  let batch: { id: string; data: Record<string, unknown> } | null = null;
+  let chunks: Array<{ id: string; data: Record<string, unknown> }> = [];
+  let chunksTruncated = false;
+  if (activeBatchId) {
+    const batchSnapshot = await getDoc(doc(firestore, base + '/routeMasterBatches', activeBatchId));
+    if (batchSnapshot.exists()) {
+      batch = { id: batchSnapshot.id, data: batchSnapshot.data() };
+      const chunkSnapshot = await getDocs(query(
+        collection(firestore, base + '/routeMasterBatches/' + activeBatchId + '/chunks'),
+        orderBy('chunkIndex', 'asc'),
+        limit(51),
+      ));
+      chunks = chunkSnapshot.docs.map((item) => ({ id: item.id, data: item.data() }));
+      chunksTruncated = chunkSnapshot.size >= 51;
+    }
+  }
+
+  const snapshot: WorkspaceIntegritySnapshot = {
+    workspaceId,
+    workspace: {
+      exists: workspaceSnapshot.exists(),
+      data: workspaceSnapshot.exists()
+        ? { ...workspaceSnapshot.data(), id: workspaceSnapshot.id }
+        : {},
+    },
+    members: memberSnapshot.docs.map((item) => ({ id: item.id, data: item.data() })),
+    membersTruncated: memberSnapshot.size >= WORKSPACE_INTEGRITY_MAX_MEMBERS,
+    settings: {
+      exists: settingsSnapshot.exists(),
+      data: settingsSnapshot.exists() ? settingsSnapshot.data() : {},
+    },
+    incidents: incidentSnapshot.docs.map((item) => ({ id: item.id, data: item.data() })),
+    incidentsTruncated: incidentSnapshot.size >= WORKSPACE_INTEGRITY_MAX_INCIDENTS,
+    incidentKeys: keySnapshot.docs.map((item) => ({ id: item.id, data: item.data() })),
+    incidentKeysTruncated: keySnapshot.size >= WORKSPACE_INTEGRITY_MAX_KEYS,
+    history,
+    routeMaster: {
+      meta,
+      batch,
+      chunks,
+      chunksTruncated,
+    },
+    restoreOperations: operationsSnapshot.docs.map((item) => ({ id: item.id, data: item.data() })),
+    restoreOperationsTruncated: operationsSnapshot.size >= 30,
+  };
+
+  const report = buildWorkspaceIntegrityReport(snapshot, now());
+  const runId = newId();
+  const createdAt = report.scannedAt;
+  const historyRef = doc(firestore, base + '/integrityRuns', runId);
+  const historyRecord = {
+    id: runId,
+    kind: 'scan',
+    status: report.status,
+    createdAt,
+    createdBy: user.uid,
+    createdByName: user.displayName || user.email || '',
+    counts: report.counts,
+    coverage: report.coverage,
+    findingCount: report.findings.length,
+    repairsAvailable: report.repairs.length,
+    findings: report.findings.slice(0, 25).map((item) => ({
+      id: item.id,
+      category: item.category,
+      severity: item.severity,
+      title: item.title,
+    })),
+  };
+  await setDoc(historyRef, historyRecord);
+  const savedHistory = await getWorkspaceIntegrityHistory(workspaceId, user);
+  return {
+    report: { ...report, runId },
+    history: savedHistory.length ? savedHistory : [historyRecord],
+  };
+}
+
+export async function applyWorkspaceIntegrityRepairs(
+  workspaceId: string,
+  user: User,
+  requested: WorkspaceIntegrityRepair[],
+): Promise<{
+  runId: string;
+  applied: number;
+  skipped: number;
+  errors: string[];
+  history: Array<Record<string, unknown> & { id: string }>;
+}> {
+  await assertWorkspaceAdmin(workspaceId, user);
+  if (!Array.isArray(requested) || requested.length < 1 || requested.length > WORKSPACE_INTEGRITY_MAX_REPAIRS) {
+    throw new FirebaseRepositoryError('integrity_repair_plan_invalid', 'Repair plan harus berisi 1 sampai 50 operasi yang valid.');
+  }
+
+  let applied = 0;
+  let skipped = 0;
+  const errors: string[] = [];
+  const operations: Array<Record<string, unknown>> = [];
+
+  for (const operation of requested) {
+    let operationStatus = 'skipped';
+    try {
+      if (operation.kind === 'create-incident-key') {
+        const incidentId = String(operation.incidentId || '').trim();
+        const normalizedKey = String(operation.normalizedKey || '').trim();
+        if (!incidentId || !normalizedKey || normalizeKey(normalizedKey) !== normalizedKey) {
+          throw new FirebaseRepositoryError('integrity_repair_input_invalid', 'Identitas incident key untuk pembuatan index tidak valid.');
+        }
+        const incidentRef = doc(firestore, incidentsPath(workspaceId), incidentId);
+        const keyRef = incidentKeyRef(workspaceId, normalizedKey);
+        const outcome = await runTransaction(firestore, async (transaction) => {
+          const [incidentSnapshot, keySnapshot] = await Promise.all([
+            transaction.get(incidentRef),
+            transaction.get(keyRef),
+          ]);
+          if (!incidentSnapshot.exists()) {
+            throw new FirebaseRepositoryError('integrity_repair_conflict', 'Incident tujuan tidak ditemukan lagi.');
+          }
+          const data = incidentSnapshot.data();
+          if (Number(data.deletedAt) > 0
+            || String(data.normalizedIncidentId || '') !== normalizedKey
+            || normalizeKey(String(data.incidentId || '')) !== normalizedKey) {
+            throw new FirebaseRepositoryError('integrity_repair_conflict', 'Incident berubah sejak hasil scan; index tidak dibuat.');
+          }
+          if (keySnapshot.exists()) return 'skipped';
+          transaction.set(keyRef, {
+            incidentId,
+            normalizedKey,
+            active: true,
+          });
+          return 'applied';
+        });
+        if (outcome === 'applied') applied += 1;
+        else skipped += 1;
+        operationStatus = outcome;
+      } else if (operation.kind === 'delete-orphan-incident-key') {
+        const keyId = String(operation.keyId || '').trim();
+        const incidentId = String(operation.incidentId || '').trim();
+        const normalizedKey = String(operation.normalizedKey || '').trim();
+        if (!keyId || !incidentId || !normalizedKey) {
+          throw new FirebaseRepositoryError('integrity_repair_input_invalid', 'Identitas index orphan untuk penghapusan tidak valid.');
+        }
+        const keyRef = doc(firestore, workspacePath(workspaceId) + '/incidentKeys', keyId);
+        const incidentRef = doc(firestore, incidentsPath(workspaceId), incidentId);
+        const outcome = await runTransaction(firestore, async (transaction) => {
+          const [keySnapshot, incidentSnapshot] = await Promise.all([
+            transaction.get(keyRef),
+            transaction.get(incidentRef),
+          ]);
+          if (!keySnapshot.exists()) return 'skipped';
+          const keyData = keySnapshot.data();
+          if (String(keyData.incidentId || '') !== incidentId
+            || String(keyData.normalizedKey || '') !== normalizedKey) {
+            throw new FirebaseRepositoryError('integrity_repair_conflict', 'Index berubah sejak hasil scan; penghapusan dibatalkan.');
+          }
+          const orphaned = !incidentSnapshot.exists()
+            || Number(incidentSnapshot.data().deletedAt) > 0
+            || String(incidentSnapshot.data().normalizedIncidentId || '') !== normalizedKey;
+          if (!orphaned) return 'skipped';
+          transaction.delete(keyRef);
+          return 'applied';
+        });
+        if (outcome === 'applied') applied += 1;
+        else skipped += 1;
+        operationStatus = outcome;
+      } else {
+        throw new FirebaseRepositoryError('integrity_repair_kind_invalid', 'Jenis repair tidak didukung.');
+      }
+      operations.push({ id: operation.id, kind: operation.kind, status: operationStatus });
+    } catch (error) {
+      const message = error instanceof Error ? error.message : 'Repair gagal diproses.';
+      errors.push(String(operation.id || operation.kind || 'operation') + ': ' + message);
+      operations.push({ id: operation.id, kind: operation.kind, status: 'failed', message });
+    }
+  }
+
+  const runId = newId();
+  const createdAt = now();
+  await setDoc(doc(firestore, workspacePath(workspaceId) + '/integrityRuns', runId), {
+    id: runId,
+    kind: 'repair',
+    status: errors.length ? 'partial' : 'completed',
+    createdAt,
+    createdBy: user.uid,
+    createdByName: user.displayName || user.email || '',
+    applied,
+    skipped,
+    errorCount: errors.length,
+    errors: errors.slice(0, 20),
+    operations: operations.slice(0, WORKSPACE_INTEGRITY_MAX_REPAIRS),
+  });
+  const history = await getWorkspaceIntegrityHistory(workspaceId, user);
+  return { runId, applied, skipped, errors, history };
 }
 
 export async function exportWorkspaceBackup(workspaceId: string, user: User): Promise<WorkspaceBackupBundle> {

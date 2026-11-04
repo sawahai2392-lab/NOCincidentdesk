@@ -35,6 +35,7 @@ import { mergeIncidentPage } from './incident-pagination';
 import { analyzeWorkspaceImport } from './workspace-import';
 import { planSelectiveWorkspaceRestore } from './workspace-restore-plan';
 import { executeSelectiveWorkspaceRestore } from './workspace-restore-execution';
+import WorkspaceIntegrityPanel from './WorkspaceIntegrityPanel';
 import {
     canCleanupStaleRouteMasterBatch,
     canReactivateRouteMasterBatch,
@@ -1051,7 +1052,7 @@ function App() {
 {workspaceRestoreResult.warnings?.map((item, index) => <small key={'restore-warning-'+index}>• {item}</small>)}
 {workspaceRestoreResult.stagedBatchId && <small>Staging batch: {workspaceRestoreResult.stagedBatchId}</small>}
 </div>}
-</div>{isAdmin && <section className='panel settings-panel restore-recovery-panel'>
+</div>{isAdmin && <WorkspaceIntegrityPanel />}{isAdmin && <section className='panel settings-panel restore-recovery-panel'>
 <div className='panel-head'><div><h2>Workspace Restore Recovery</h2><p>Pulihkan batch Route Master sebelumnya, bersihkan staging lama, dan tinjau aktivitas restore.</p></div><Button icon={<History size={16}/>} onClick={() => void loadWorkspaceRestoreRecovery()} disabled={workspaceRestoreRecoveryBusy || Boolean(workspaceRestoreRecoveryAction)}>{workspaceRestoreRecoveryBusy ? 'Memuat…' : 'Refresh recovery'}</Button></div>
 {!workspaceRestoreRecovery && <div className='integration-meta'><small>{workspaceRestoreRecoveryBusy ? 'Memuat status recovery workspace…' : 'Status recovery belum tersedia. Refresh untuk memuat data.'}</small></div>}
 {workspaceRestoreRecovery && <>
