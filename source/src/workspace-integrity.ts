@@ -1,4 +1,4 @@
-import { validateRouteMasterChunkSet } from './route-master-integrity';
+import { validateRouteMasterChunkSet } from './route-master-integrity.ts';
 
 export type IntegritySeverity = 'critical' | 'warning';
 export type IntegrityStatus = 'healthy' | 'warning' | 'critical';
@@ -134,7 +134,7 @@ export function buildWorkspaceIntegrityReport(
     detail: 'Workspace harus memiliki setidaknya satu anggota dengan role Admin dan status active.',
   });
   evaluate(
-    !text(workspace.ownerUid) || activeAdmins.some((member) =>
+    Boolean(text(workspace.ownerUid)) && activeAdmins.some((member) =>
       member.id === text(workspace.ownerUid) || member.data.userId === text(workspace.ownerUid),
     ),
     snapshot.membersTruncated ? 'warning' : 'critical',
