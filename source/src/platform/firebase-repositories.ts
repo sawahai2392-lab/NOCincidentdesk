@@ -813,6 +813,7 @@ export async function saveSettings(
       }
       transaction.set(reference, next);
     });
+    recordBatchWrite(1);
   } else {
     await setDoc(reference, next);
   }
@@ -1013,9 +1014,10 @@ export async function commitRouteMasterImport(
     if (!latestBatch.exists() || latestBatch.data().status !== 'staging') {
       throw new FirebaseRepositoryError('route_master_staging_not_found', 'Batch staging Route Master sudah tidak tersedia.');
     }
-    const activeBatchId = latestMeta.exists() && typeof latestMeta.data().currentBatchId === 'string'
+    const activeBatchValue = latestMeta.exists() && typeof latestMeta.data().currentBatchId === 'string'
       ? latestMeta.data().currentBatchId
-      : null;
+      : '';
+    const activeBatchId = activeBatchValue || null;
     if (expectedCurrentBatchId !== undefined && activeBatchId !== expectedCurrentBatchId) {
       throw new FirebaseRepositoryError(
         'route_master_conflict',
@@ -1038,7 +1040,7 @@ export async function commitRouteMasterImport(
       updatedByName: user.displayName || user.email || '',
     });
   });
-  recordTransaction();
+  recordBatchWrite(2);
 }
 
 export async function createInvite(
