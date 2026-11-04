@@ -1,6 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import {
+  canCleanupStaleRouteMasterBatch,
   canReactivateRouteMasterBatch,
   getRestoreOperationDisplayStatus,
   isRestoreOperationStale,
@@ -85,4 +86,21 @@ test('operation labels cover every persisted status', () => {
   assert.equal(restoreOperationStatusLabel('failed'), 'Gagal');
   assert.equal(restoreOperationStatusLabel('partial'), 'Parsial');
   assert.equal(restoreOperationStatusLabel('needs-review'), 'Perlu pemeriksaan');
+});
+
+test('only stale, inactive staging batches within the automated chunk cap can be cleaned', () => {
+  const base = {
+    id: 'stale-batch',
+    status: 'staging',
+    count: 0,
+    createdAt: now - STALE_ROUTE_MASTER_BATCH_MS - 1,
+    lastActivityAt: now - STALE_ROUTE_MASTER_BATCH_MS - 1,
+    stale: true,
+    cleanupSupported: true,
+  };
+  assert.equal(canCleanupStaleRouteMasterBatch(base, 'active-batch'), true);
+  assert.equal(canCleanupStaleRouteMasterBatch({ ...base, cleanupSupported: false }, 'active-batch'), false);
+  assert.equal(canCleanupStaleRouteMasterBatch({ ...base, stale: false }, 'active-batch'), false);
+  assert.equal(canCleanupStaleRouteMasterBatch(base, base.id), false);
+  assert.equal(canCleanupStaleRouteMasterBatch({ ...base, status: 'committed' }, 'active-batch'), false);
 });
