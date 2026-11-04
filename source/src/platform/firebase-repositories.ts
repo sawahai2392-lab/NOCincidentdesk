@@ -20,6 +20,7 @@ import type { User } from 'firebase/auth';
 import { firestore } from './firebase';
 import {
   defaultSettings,
+  emptyIncident,
   newId,
   type AuditEntry,
   type BootstrapData,
@@ -152,6 +153,34 @@ export async function ensureWorkspace(user: User): Promise<WorkspaceContext> {
   return { profile, user };
 }
 
+export function normalizeIncidentSnapshot(value: DocumentData, id: string): Incident {
+  const base = emptyIncident(String(value.reporter || ''));
+  const defined = Object.fromEntries(Object.entries(value).filter(([, field]) => field !== undefined));
+  const merged = { ...base, ...defined } as Incident;
+  const checklist = value.checklist && typeof value.checklist === 'object' && !Array.isArray(value.checklist)
+    ? value.checklist as Partial<Incident['checklist']>
+    : {};
+  return {
+    ...merged,
+    id,
+    identityMode: value.identityMode === 'b2b' ? 'b2b' : 'standard',
+    status: typeof value.status === 'string' ? value.status as Incident['status'] : base.status,
+    severity: typeof value.severity === 'string' ? value.severity as Incident['severity'] : base.severity,
+    condition: typeof value.condition === 'string' ? value.condition as Incident['condition'] : base.condition,
+    occurTime: typeof value.occurTime === 'string' ? value.occurTime : '',
+    progress: Array.isArray(value.progress) ? value.progress as Incident['progress'] : [],
+    impacts: Array.isArray(value.impacts) ? value.impacts as Incident['impacts'] : [],
+    cutPoints: Array.isArray(value.cutPoints) ? value.cutPoints as Incident['cutPoints'] : [],
+    geoCoordinates: Array.isArray(value.geoCoordinates) ? value.geoCoordinates as Incident['geoCoordinates'] : [],
+    attachments: Array.isArray(value.attachments) ? value.attachments : [],
+    checklist: { ...base.checklist, ...checklist },
+    revision: Number(value.revision) > 0 ? Number(value.revision) : 1,
+    createdAt: Number(value.createdAt) || 0,
+    updatedAt: Number(value.updatedAt) || Number(value.createdAt) || 0,
+    deletedAt: Number(value.deletedAt) || 0,
+  };
+}
+
 export async function bootstrapWorkspace(user: User): Promise<BootstrapData> {
   const context = await ensureWorkspace(user);
   const workspaceId = context.profile.workspaceId;
@@ -162,10 +191,7 @@ export async function bootstrapWorkspace(user: User): Promise<BootstrapData> {
     getDoc(doc(firestore, settingsPath(workspaceId))),
   ]);
 
-  const incidents = incidentSnapshot.docs.map((snapshot) => ({
-    ...snapshot.data(),
-    id: snapshot.id,
-  })) as Incident[];
+  const incidents = incidentSnapshot.docs.map((snapshot) => normalizeIncidentSnapshot(snapshot.data(), snapshot.id));
   const members = memberSnapshot.docs
     .filter((snapshot) => snapshot.data().status !== 'removed')
     .map((snapshot) => ({ ...snapshot.data(), id: snapshot.id })) as Member[];
@@ -199,7 +225,7 @@ export async function loadIncidentPage(
     ),
   );
   return {
-    incidents: snapshot.docs.map((item) => ({ ...item.data(), id: item.id })) as Incident[],
+    incidents: snapshot.docs.map((item) => normalizeIncidentSnapshot(item.data(), item.id)),
     nextToken: snapshot.docs.length === 100 ? snapshot.docs[snapshot.docs.length - 1].id : null,
   };
 }
@@ -893,7 +919,7 @@ export function subscribeToWorkspace(
   const incidentQuery = query(collection(firestore, incidentsPath(workspaceId)), orderBy('updatedAt', 'desc'), limit(100));
   unsubscribers.push(onSnapshot(incidentQuery, (snapshot) => {
     snapshot.docChanges().forEach((change) => {
-      const incident = { ...change.doc.data(), id: change.doc.id } as Incident;
+      const incident = normalizeIncidentSnapshot(change.doc.data(), change.doc.id);
       if (change.type === 'removed') {
         // A limited query can evict a still-existing document when newer incidents arrive.
         // Verify before telling the UI that the document was permanently deleted.
@@ -921,7 +947,7 @@ export async function searchIncidents(workspaceId: string, term: string): Promis
     query(collection(firestore, incidentsPath(workspaceId)), orderBy('updatedAt', 'desc'), limit(100)),
   );
   return snapshot.docs
-    .map((item) => ({ ...item.data(), id: item.id }) as Incident)
+    .map((item) => normalizeIncidentSnapshot(item.data(), item.id))
     .filter((incident) => {
       const haystack = [
         incident.incidentId,
