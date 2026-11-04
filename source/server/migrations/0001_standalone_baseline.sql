@@ -1,8 +1,6 @@
 -- NOC Incident Desk standalone PostgreSQL baseline
 -- All schema changes after this file must be added as a new numbered migration.
 
-CREATE EXTENSION IF NOT EXISTS pgcrypto;
-
 DO $$ BEGIN
   CREATE TYPE workspace_role AS ENUM ('admin', 'supervisor', 'operator');
 EXCEPTION WHEN duplicate_object THEN NULL;
