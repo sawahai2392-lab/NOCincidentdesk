@@ -110,9 +110,18 @@ beforeEach(async () => {
   });
 });
 
+test('email-unverified account cannot access workspace records', async () => {
+  const db = testEnv.authenticatedContext('operator-a', {
+    email: 'operator@example.com',
+    email_verified: false,
+  }).firestore();
+  await assertFails(getDoc(doc(db, 'workspaces/workspace-a/incidents/incident-a')));
+});
+
 test('workspace member can read own incident', async () => {
   const db = testEnv.authenticatedContext('operator-a', {
     email: 'operator@example.com',
+    email_verified: true,
   }).firestore();
   await assertSucceeds(getDoc(doc(db, 'workspaces/workspace-a/incidents/incident-a')));
 });
@@ -120,6 +129,7 @@ test('workspace member can read own incident', async () => {
 test('member cannot read another workspace incident by guessing its document path', async () => {
   const db = testEnv.authenticatedContext('operator-a', {
     email: 'operator@example.com',
+    email_verified: true,
   }).firestore();
   await assertFails(getDoc(doc(db, 'workspaces/workspace-b/incidents/private-b')));
 });
@@ -127,6 +137,7 @@ test('member cannot read another workspace incident by guessing its document pat
 test('operator can create a draft incident in their workspace', async () => {
   const db = testEnv.authenticatedContext('operator-a', {
     email: 'operator@example.com',
+    email_verified: true,
   }).firestore();
   await assertSucceeds(setDoc(doc(db, 'workspaces/workspace-a/incidents/new-draft'), {
     id: 'new-draft',
@@ -145,6 +156,7 @@ test('operator can create a draft incident in their workspace', async () => {
 test('incident identifier requires a matching index in the same atomic write', async () => {
   const db = testEnv.authenticatedContext('operator-a', {
     email: 'operator@example.com',
+    email_verified: true,
   }).firestore();
 
   const withoutIndex = {
@@ -181,6 +193,7 @@ test('incident identifier requires a matching index in the same atomic write', a
 test('operator cannot resolve an incident or move it to Trash', async () => {
   const db = testEnv.authenticatedContext('operator-a', {
     email: 'operator@example.com',
+    email_verified: true,
   }).firestore();
   const incidentRef = doc(db, 'workspaces/workspace-a/incidents/incident-a');
 
@@ -215,6 +228,7 @@ test('operator cannot resolve an incident or move it to Trash', async () => {
 test('supervisor can resolve an incident', async () => {
   const db = testEnv.authenticatedContext('supervisor-a', {
     email: 'supervisor@example.com',
+    email_verified: true,
   }).firestore();
   await assertSucceeds(setDoc(doc(db, 'workspaces/workspace-a/incidents/incident-a'), {
     id: 'incident-a',
@@ -234,6 +248,7 @@ test('supervisor can resolve an incident', async () => {
 test('incident key documents cannot point to missing incidents', async () => {
   const db = testEnv.authenticatedContext('operator-a', {
     email: 'operator@example.com',
+    email_verified: true,
   }).firestore();
 
   await assertFails(setDoc(doc(db, 'workspaces/workspace-a/incidentKeys/poisoned'), {
@@ -246,6 +261,7 @@ test('incident key documents cannot point to missing incidents', async () => {
 test('admin can release an incident key when moving an incident to Trash', async () => {
   const db = testEnv.authenticatedContext('admin-a', {
     email: 'admin@example.com',
+    email_verified: true,
   }).firestore();
   const batch = writeBatch(db);
   batch.update(doc(db, 'workspaces/workspace-a/incidents/incident-a'), {
@@ -297,6 +313,7 @@ test('removed member can rejoin the same workspace with a fresh email-bound invi
 
   const db = testEnv.authenticatedContext('operator-a', {
     email: 'operator@example.com',
+    email_verified: true,
   }).firestore();
   const joinedAt = Date.now();
   const batch = writeBatch(db);
@@ -329,6 +346,7 @@ test('removed member can rejoin the same workspace with a fresh email-bound invi
 test('audit entries are append-only for workspace members', async () => {
   const db = testEnv.authenticatedContext('operator-a', {
     email: 'operator@example.com',
+    email_verified: true,
   }).firestore();
   const auditRef = doc(db, 'workspaces/workspace-a/incidents/incident-a/audit/audit-1');
   await assertSucceeds(setDoc(auditRef, {
@@ -348,6 +366,7 @@ test('audit entries are append-only for workspace members', async () => {
 test('first account can create its own Admin workspace atomically', async () => {
   const db = testEnv.authenticatedContext('first-admin', {
     email: 'first@example.com',
+    email_verified: true,
   }).firestore();
   const batch = writeBatch(db);
   batch.set(doc(db, 'workspaces/new-workspace'), {
