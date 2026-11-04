@@ -2,13 +2,15 @@
 
 **Status:** Architecture baseline  
 **Decision date:** 2026-11-04  
-**Branch:** `feat/standalone-platform-migration`
+**Branch:** \`feat/standalone-platform-migration\`
 
 ## 1. Goal
 
 Make NOC Incident Desk deployable and operable without AppDeploy. AppDeploy must no longer be required for frontend modules, API routing, authentication, database access, file storage, realtime messaging, invitations, notifications, AI, secrets, or scheduled work.
 
 The migration is a **modular monolith**, not a microservice collection. One deployable Node.js application owns the domain and data, with clear internal modules and replaceable infrastructure adapters. This is intentionally simpler to operate and debug for the current team size, while leaving room to split workloads later if actual scale requires it.
+
+The local development environment uses native PostgreSQL on Windows. Docker, Docker Compose, Docker Desktop, and WSL2 are not prerequisites.
 
 ## 2. Runtime and framework decisions
 
@@ -30,7 +32,7 @@ Use supported, stable releases only. Do not adopt prerelease or experimental pac
 | AI | Direct provider adapter using the official Google GenAI SDK | Gemini calls remain server-side; the domain is not coupled to AppDeploy's AI wrapper. |
 | Jobs | PostgreSQL-backed job queue/scheduler | SLA escalation and maintenance jobs do not require a Redis service for the initial deployment. |
 | Testing | Vitest + Playwright | Unit/integration tests and browser-level operational flows. |
-| Local infrastructure | Docker Compose | Reproducible local PostgreSQL and persistent volumes. |
+| Local infrastructure | Native PostgreSQL 18 Windows installer + pgAdmin | Developers use a local Windows service and a PowerShell database setup script; no container runtime is needed. |
 
 Version guardrails checked on the decision date:
 - Node 26 is Active LTS; Node 27 is Alpha and is not a production target.
@@ -58,7 +60,7 @@ No database query, authorization decision, AI key, or file-system path may be ex
 
 The migration is incremental. Existing UI components and CSS are retained initially; files move only when imports and tests can be updated safely.
 
-```text
+\`\`\`text
 source/
   apps/
     web/                     # React/Vite dashboard
@@ -69,31 +71,30 @@ source/
     database/                # Drizzle schema, migrations, repositories
     auth/                    # Better Auth config and session helpers
     storage/                 # local and S3-compatible storage adapters
-    integrations/             # Gemini, SMTP, Web Push
-  infra/
-    docker-compose.yml
+    integrations/            # Gemini, SMTP, Web Push
   scripts/
+    setup-local-postgres.ps1 # Native Windows PostgreSQL role/database setup
     migrate-appdeploy-export.ts
   docs/
     architecture/
   .env.example
   package.json                # npm workspaces; lockfile committed
-```
+\`\`\`
 
-A compatibility facade may temporarily preserve the current UI's `api`, `auth`, `image`, `invitesClient`, `notifications`, and `ws` interface while implementations are replaced. It must be local source code and must not resolve to an AppDeploy package.
+A compatibility facade may temporarily preserve the current UI's \`api\`, \`auth\`, \`image\`, \`invitesClient\`, \`notifications\`, and \`ws\` interface while implementations are replaced. It must be local source code and must not resolve to an AppDeploy package.
 
 ## 5. Domain and data model
 
-PostgreSQL becomes the sole source of truth. Every tenant-owned row carries a non-null `workspace_id`; all repository methods require a workspace context. The API must verify both membership and role for every protected action.
+PostgreSQL becomes the sole source of truth. Every tenant-owned row carries a non-null \`workspace_id\`; all repository methods require a workspace context. The API must verify both membership and role for every protected action.
 
 Core tables:
-- Identity: Better Auth `user`, `account`, `session`, `verification`.
-- Workspace: `workspaces`, `workspace_members`, `workspace_invitations`, `workspace_settings`.
-- Incident: `incidents`, `incident_versions`, `incident_audit_logs`, `incident_attachments`.
-- Operational details: `incident_impacts`, `incident_progress`, `incident_cut_points`, `incident_geo_coordinates`.
-- Master data: `route_master_imports`, `route_master_items`.
-- Notifications: `notifications`, `push_subscriptions`.
-- Operational processing: `job_runs` / queue tables managed by the PostgreSQL-backed job runner.
+- Identity: Better Auth \`user\`, \`account\`, \`session\`, \`verification\`.
+- Workspace: \`workspaces\`, \`workspace_members\`, \`workspace_invitations\`, \`workspace_settings\`.
+- Incident: \`incidents\`, \`incident_versions\`, \`incident_audit_logs\`, \`incident_attachments\`.
+- Operational details: \`incident_impacts\`, \`incident_progress\`, \`incident_cut_points\`, \`incident_geo_coordinates\`.
+- Master data: \`route_master_imports\`, \`route_master_items\`.
+- Notifications: \`notifications\`, \`push_subscriptions\`.
+- Operational processing: \`job_runs\` / queue tables managed by the PostgreSQL-backed job runner.
 
 Important integrity rules:
 - Unique incident ID is enforced per workspace for active/non-trashed incidents using a database constraint/index, not only a preflight query.
@@ -107,9 +108,9 @@ Important integrity rules:
 ## 6. Runtime boundaries
 
 ### HTTP and sessions
-- Same-origin deployment: browser and API share the app origin; API is under `/api/v1`, Better Auth under `/api/auth`.
-- Better Auth uses database-backed, HttpOnly, Secure-in-production cookies. Browser requests use `credentials: "include"`; no long-lived bearer token is placed in localStorage.
-- OAuth credentials and all provider keys are environment secrets. Local use is supported with `.env`; production uses the host's secret store.
+- Same-origin deployment: browser and API share the app origin; API is under \`/api/v1\`, Better Auth under \`/api/auth\`.
+- Better Auth uses database-backed, HttpOnly, Secure-in-production cookies. Browser requests use \`credentials: "include"\`; no long-lived bearer token is placed in localStorage.
+- OAuth credentials and all provider keys are environment secrets. Local use is supported with \`.env\`; production uses the host's secret store.
 - CORS is allowlist-only if a separate web origin is ever introduced.
 
 ### Realtime
@@ -121,7 +122,7 @@ Important integrity rules:
 
 ### Storage
 - Development: local persistent volume, generated opaque object keys, file size/type allowlists.
-- Production: S3-compatible object API behind the same `StorageService` interface.
+- Production: S3-compatible object API behind the same \`StorageService\` interface.
 - Download URLs are short-lived and generated only after an authorization check.
 - No public bucket or permanent public attachment URL by default.
 
@@ -139,7 +140,7 @@ Important integrity rules:
 
 ## 7. Security and quality requirements
 
-- TypeScript strict mode; no `any` for new domain/API code.
+- TypeScript strict mode; no \`any\` for new domain/API code.
 - Zod validation for all request bodies, query parameters, and environment variables.
 - Password/OAuth/session management delegated to Better Auth; authorization remains in domain services.
 - Workspace scoping enforced in server repositories; avoid raw tenant IDs from request bodies.
@@ -153,14 +154,14 @@ Important integrity rules:
 
 ## 8. Deployment target
 
-Initial production target is a portable Node.js/Docker deployment:
+Initial production target is a portable Node.js deployment without a mandatory container runtime:
 1. Web assets served from the same Node application or a static server.
 2. Hono API + Socket.IO in one Node 26 process.
-3. PostgreSQL 18 database with persistent storage and scheduled backups.
+3. PostgreSQL 18 as a native service or managed PostgreSQL database, with persistent storage and scheduled backups.
 4. Local or S3-compatible attachment storage.
 5. Environment-based OAuth, Gemini, SMTP, and VAPID configuration.
 
-The app must run locally with Docker Compose + npm and must not require AppDeploy, Firebase, or a vendor-specific database/storage SDK.
+The app must run locally on Windows with native PostgreSQL + npm and must not require Docker, Docker Compose, WSL2, AppDeploy, Firebase, or a vendor-specific database/storage SDK. CI may provision its own PostgreSQL test service on the hosted runner; that is not a developer-machine dependency.
 
 ## 9. External references
 
@@ -171,6 +172,7 @@ The app must run locally with Docker Compose + npm and must not require AppDeplo
 - [Better Auth releases and security notices](https://better-auth.com/changelog)
 - [Better Auth PostgreSQL adapter](https://better-auth.com/docs/adapters/postgresql)
 - [PostgreSQL version policy](https://www.postgresql.org/support/versioning/)
+- [PostgreSQL Windows installer](https://www.postgresql.org/download/windows/)
 - [Drizzle migrations](https://orm.drizzle.team/docs/migrations)
 - [TanStack Router](https://tanstack.com/router/latest/docs/overview)
 - [Socket.IO PostgreSQL adapter](https://socket.io/docs/v4/postgres-adapter)
