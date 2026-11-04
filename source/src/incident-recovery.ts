@@ -78,7 +78,9 @@ export function readIncidentRecovery(
           && age >= 0
           && age <= RECOVERY_TTL_MS
           && recovered.incident?.id === serverIncident.id
-          && recovered.incident?.revision === serverIncident.revision;
+          // Retain stale local drafts for an explicit conflict decision in the editor.
+          && Number.isFinite(recovered.incident?.revision)
+          && recovered.incident.revision <= serverIncident.revision;
 
         if (valid && JSON.stringify(recovered.incident) !== JSON.stringify(serverIncident)) {
           return recovered.incident;

@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useState } from 'react';
-import { api } from '@appdeploy/client';
+import { api } from './platform/firebase-client';
 import { AlertTriangle, CheckCircle2, LoaderCircle, ShieldCheck, Sparkles, WandSparkles, X } from 'lucide-react';
 import { analyzeReport, newId, type Incident, type ParserFieldConfidence } from './domain';
 

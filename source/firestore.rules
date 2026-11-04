@@ -1,0 +1,449 @@
+rules_version = '2';
+
+service cloud.firestore {
+  match /databases/{database}/documents {
+    function signedIn() {
+      return request.auth != null;
+    }
+
+    function emailVerified() {
+      return signedIn() && request.auth.token.email_verified == true;
+    }
+
+    function memberPath(workspaceId, uid) {
+      return /databases/$(database)/documents/workspaces/$(workspaceId)/members/$(uid);
+    }
+
+    function workspacePath(workspaceId) {
+      return /databases/$(database)/documents/workspaces/$(workspaceId);
+    }
+
+    function incidentPath(workspaceId, incidentId) {
+      return /databases/$(database)/documents/workspaces/$(workspaceId)/incidents/$(incidentId);
+    }
+
+    function incidentKeyPath(workspaceId, normalizedKey) {
+      return /databases/$(database)/documents/workspaces/$(workspaceId)/incidentKeys/$(normalizedKey);
+    }
+
+    function incidentAuditPath(workspaceId, incidentId, auditId) {
+      return /databases/$(database)/documents/workspaces/$(workspaceId)/incidents/$(incidentId)/audit/$(auditId);
+    }
+
+    function incidentVersionPath(workspaceId, incidentId, versionId) {
+      return /databases/$(database)/documents/workspaces/$(workspaceId)/incidents/$(incidentId)/versions/$(versionId);
+    }
+
+    function incidentKeyMatchesAfter(workspaceId) {
+      let target = incidentPath(workspaceId, request.resource.data.incidentId);
+      return request.resource.data.incidentId is string
+        && request.resource.data.normalizedKey is string
+        && request.resource.data.normalizedKey.size() > 0
+        && existsAfter(target)
+        && getAfter(target).data.deletedAt == 0
+        && getAfter(target).data.normalizedIncidentId == request.resource.data.normalizedKey;
+    }
+
+    function incidentHasKeyAfter(workspaceId, incidentId) {
+      let businessId = request.resource.data.get('incidentId', '');
+      let normalized = request.resource.data.get('normalizedIncidentId', '');
+      let deletedAt = request.resource.data.get('deletedAt', 0);
+      return deletedAt > 0
+        || !(businessId is string)
+        || businessId.size() == 0
+        || (
+          normalized is string
+          && normalized.size() > 0
+          && existsAfter(incidentKeyPath(workspaceId, normalized))
+          && getAfter(incidentKeyPath(workspaceId, normalized)).data.incidentId == incidentId
+          && getAfter(incidentKeyPath(workspaceId, normalized)).data.normalizedKey == normalized
+          && getAfter(incidentKeyPath(workspaceId, normalized)).data.active == true
+        );
+    }
+
+    function activeMember(workspaceId) {
+      return emailVerified()
+        && exists(memberPath(workspaceId, request.auth.uid))
+        && get(memberPath(workspaceId, request.auth.uid)).data.status == 'active';
+    }
+
+    function memberRole(workspaceId) {
+      return get(memberPath(workspaceId, request.auth.uid)).data.role;
+    }
+
+    function isAdmin(workspaceId) {
+      return activeMember(workspaceId) && memberRole(workspaceId) == 'admin';
+    }
+
+    function canReview(workspaceId) {
+      return activeMember(workspaceId)
+        && (memberRole(workspaceId) == 'admin' || memberRole(workspaceId) == 'supervisor');
+    }
+
+    function invitationPath(code) {
+      return /databases/$(database)/documents/workspaceInvites/$(code);
+    }
+
+    function invitationRedeemedFor(workspaceId, memberUid) {
+      return emailVerified()
+        && request.resource.data.inviteCode is string
+        && existsAfter(invitationPath(request.resource.data.inviteCode))
+        && getAfter(invitationPath(request.resource.data.inviteCode)).data.status == 'joined'
+        && getAfter(invitationPath(request.resource.data.inviteCode)).data.joinedBy == memberUid
+        && getAfter(invitationPath(request.resource.data.inviteCode)).data.workspaceId == workspaceId
+        && getAfter(invitationPath(request.resource.data.inviteCode)).data.email == request.auth.token.email
+        && getAfter(invitationPath(request.resource.data.inviteCode)).data.role == request.resource.data.role
+        && getAfter(invitationPath(request.resource.data.inviteCode)).data.expiresAt > request.time;
+    }
+
+    function allowedIncidentFields() {
+      return [
+        'id', 'identityMode', 'b2bTitle', 'group', 'status', 'severity', 'condition',
+        'linkA', 'linkB', 'routeSegment', 'systemKey', 'parentIncidentId',
+        'incidentId', 'titleOverride', 'mduTicket', 'occurTime', 'dispatchTime',
+        'closedTime', 'picArea', 'picName', 'rootCause', 'cutPoint', 'action',
+        'reporter', 'internalNotes', 'impacts', 'progress', 'attachments',
+        'cutPoints', 'geoCoordinates', 'checklist', 'closingEvidenceNote',
+        'assignedToUserId', 'assignedToName', 'acknowledgedAt', 'acknowledgedBy',
+        'handoverNote', 'handoverAt', 'handoverBy', 'reopenReason', 'resolvedAt',
+        'resolvedBy', 'deletedAt', 'deletedBy', 'deleteReason', 'createdAt',
+        'createdBy', 'updatedAt', 'updatedBy', 'revision', 'normalizedIncidentId'
+      ];
+    }
+
+    function protectedIncidentChange() {
+      return request.resource.data.diff(resource.data).affectedKeys()
+        .hasAny(['deletedAt', 'deletedBy', 'deleteReason']);
+    }
+
+    function statusChangeNeedsReview() {
+      return request.resource.data.diff(resource.data).affectedKeys().hasAny(['status'])
+        && (request.resource.data.status == 'Resolved' || request.resource.data.status == 'Closed');
+    }
+
+    function validStatusTransition() {
+      let current = resource.data.status;
+      let next = request.resource.data.status;
+      return current == next
+        || (current == 'Draft' && next in ['Open', 'Cancel'])
+        || (current == 'Open' && next in ['Monitoring', 'Resolved', 'Cancel'])
+        || (current == 'Monitoring' && next in ['Open', 'Resolved', 'Cancel'])
+        || (current == 'Resolved' && next in ['Closed', 'Open'])
+        || (current == 'Closed' && next == 'Open')
+        || (current == 'Cancel' && next == 'Open');
+    }
+
+    function statusTransitionAllowedForRole(workspaceId) {
+      let current = resource.data.status;
+      let next = request.resource.data.status;
+      let unchanged = current == next;
+      let operatorAllowed = (current == 'Draft' && next == 'Open')
+        || (current == 'Open' && next == 'Monitoring')
+        || (current == 'Monitoring' && next == 'Open');
+      return unchanged || canReview(workspaceId) || operatorAllowed;
+    }
+
+    function reopenReasonPresent() {
+      let current = resource.data.status;
+      let next = request.resource.data.status;
+      return !((current in ['Resolved', 'Closed', 'Cancel']) && next == 'Open')
+        || (request.resource.data.reopenReason is string
+          && request.resource.data.reopenReason.size() > 0);
+    }
+
+    match /users/{uid} {
+      allow get: if emailVerified() && request.auth.uid == uid;
+      allow list: if false;
+
+      allow create: if emailVerified()
+        && request.auth.uid == uid
+        && request.resource.data.uid == uid
+        && request.resource.data.workspaceId is string
+        && existsAfter(memberPath(request.resource.data.workspaceId, uid))
+        && getAfter(memberPath(request.resource.data.workspaceId, uid)).data.status == 'active'
+        && request.resource.data.role == getAfter(memberPath(request.resource.data.workspaceId, uid)).data.role;
+
+      allow update: if emailVerified()
+        && request.auth.uid == uid
+        && request.resource.data.workspaceId == resource.data.workspaceId
+        && request.resource.data.uid == resource.data.uid
+        && request.resource.data.diff(resource.data).affectedKeys()
+          .hasOnly(['name', 'photoURL', 'updatedAt']);
+
+      allow delete: if false;
+    }
+
+    match /workspaces/{workspaceId} {
+      allow get: if activeMember(workspaceId);
+      allow list: if false;
+
+      allow create: if emailVerified()
+        && request.resource.data.ownerUid == request.auth.uid
+        && existsAfter(memberPath(workspaceId, request.auth.uid))
+        && getAfter(memberPath(workspaceId, request.auth.uid)).data.role == 'admin';
+
+      allow update: if isAdmin(workspaceId)
+        && request.resource.data.ownerUid == resource.data.ownerUid
+        && request.resource.data.diff(resource.data).affectedKeys()
+          .hasOnly(['name', 'updatedAt', 'status']);
+
+      allow delete: if false;
+
+      match /members/{memberUid} {
+        allow get: if (emailVerified() && memberUid == request.auth.uid) || activeMember(workspaceId);
+        allow list: if activeMember(workspaceId);
+
+        allow create: if emailVerified()
+          && memberUid == request.auth.uid
+          && request.resource.data.userId == memberUid
+          && request.resource.data.workspaceId == workspaceId
+          && request.resource.data.status == 'active'
+          && (
+            (
+              request.resource.data.role == 'admin'
+              && getAfter(workspacePath(workspaceId)).data.ownerUid == request.auth.uid
+            )
+            ||
+            (
+              request.resource.data.role in ['operator', 'supervisor']
+              && invitationRedeemedFor(workspaceId, memberUid)
+            )
+          );
+
+        allow update: if (
+          isAdmin(workspaceId)
+          && memberUid != request.auth.uid
+          && request.resource.data.userId == resource.data.userId
+          && request.resource.data.workspaceId == resource.data.workspaceId
+          && request.resource.data.diff(resource.data).affectedKeys()
+            .hasOnly(['role', 'status', 'removedAt'])
+          && request.resource.data.role in ['operator', 'supervisor']
+          && request.resource.data.status in ['active', 'removed']
+        ) || (
+          emailVerified()
+          && request.auth.uid == memberUid
+          && resource.data.status == 'removed'
+          && request.resource.data.status == 'active'
+          && request.resource.data.userId == resource.data.userId
+          && request.resource.data.workspaceId == resource.data.workspaceId
+          && request.resource.data.role in ['operator', 'supervisor']
+          && invitationRedeemedFor(workspaceId, memberUid)
+          && request.resource.data.diff(resource.data).affectedKeys()
+            .hasOnly(['role', 'email', 'name', 'joinedAt', 'status', 'inviteCode', 'removedAt'])
+        );
+
+        allow delete: if isAdmin(workspaceId) && memberUid != request.auth.uid;
+      }
+
+      match /settings/{settingId} {
+        allow get, list: if activeMember(workspaceId);
+        allow create: if emailVerified()
+          && getAfter(workspacePath(workspaceId)).data.ownerUid == request.auth.uid
+          && getAfter(memberPath(workspaceId, request.auth.uid)).data.role == 'admin';
+        allow update: if isAdmin(workspaceId);
+        allow delete: if false;
+      }
+
+      match /incidents/{incidentId} {
+        allow get, list: if activeMember(workspaceId);
+
+        allow create: if activeMember(workspaceId)
+          && request.resource.data.id == incidentId
+          && request.resource.data.createdBy == request.auth.uid
+          && request.resource.data.updatedBy == request.auth.uid
+          && request.resource.data.revision == 1
+          && request.resource.data.deletedAt == 0
+          && request.resource.data.keys().hasOnly(allowedIncidentFields())
+          && incidentHasKeyAfter(workspaceId, incidentId);
+
+        allow update: if activeMember(workspaceId)
+          && request.resource.data.createdBy == resource.data.createdBy
+          && request.resource.data.createdAt == resource.data.createdAt
+          && request.resource.data.updatedBy == request.auth.uid
+          && request.resource.data.revision == resource.data.revision + 1
+          && request.resource.data.id == incidentId
+          && request.resource.data.keys().hasOnly(allowedIncidentFields())
+          && (!protectedIncidentChange() || isAdmin(workspaceId))
+          && validStatusTransition()
+          && statusTransitionAllowedForRole(workspaceId)
+          && reopenReasonPresent()
+          && incidentHasKeyAfter(workspaceId, incidentId);
+
+        // Client-only Spark mode cannot safely cascade and verify child history.
+        // Keep hard deletion disabled until a trusted purge workflow exists.
+        allow delete: if false;
+
+        match /audit/{auditId} {
+          allow get, list: if activeMember(workspaceId);
+          allow create: if activeMember(workspaceId)
+            && request.resource.data.keys().hasOnly([
+              'action', 'summary', 'changedFields', 'fromRevision', 'toRevision',
+              'versionId', 'sourceVersionId', 'actorId', 'actorName', 'createdAt'
+            ])
+            && request.resource.data.action in [
+              'created', 'updated', 'deleted', 'restored',
+              'snapshot_created', 'version_restored'
+            ]
+            && request.resource.data.summary is string
+            && request.resource.data.changedFields is list
+            && request.resource.data.fromRevision is number
+            && request.resource.data.toRevision is number
+            && (
+              (request.resource.data.action == 'created'
+                && request.resource.data.fromRevision == 0
+                && request.resource.data.toRevision == 1)
+              || (request.resource.data.action == 'snapshot_created'
+                && request.resource.data.fromRevision == request.resource.data.toRevision)
+              || (request.resource.data.action in ['updated', 'deleted', 'restored', 'version_restored']
+                && request.resource.data.toRevision == request.resource.data.fromRevision + 1)
+            )
+            && request.resource.data.actorId == request.auth.uid
+            && request.resource.data.actorName is string
+            && request.resource.data.createdAt is number
+            && existsAfter(incidentPath(workspaceId, incidentId))
+            && request.resource.data.toRevision == getAfter(incidentPath(workspaceId, incidentId)).data.revision
+            && (
+              (
+                request.resource.data.action == 'snapshot_created'
+                && 'versionId' in request.resource.data
+                && !('sourceVersionId' in request.resource.data)
+                && existsAfter(incidentVersionPath(workspaceId, incidentId, request.resource.data.versionId))
+                && getAfter(incidentVersionPath(workspaceId, incidentId, request.resource.data.versionId)).data.auditId == auditId
+                && getAfter(incidentVersionPath(workspaceId, incidentId, request.resource.data.versionId)).data.revision == request.resource.data.toRevision
+                && getAfter(incidentVersionPath(workspaceId, incidentId, request.resource.data.versionId)).data.createdAt == request.resource.data.createdAt
+              )
+              || (
+                request.resource.data.action == 'version_restored'
+                && 'sourceVersionId' in request.resource.data
+                && !('versionId' in request.resource.data)
+                && exists(incidentVersionPath(workspaceId, incidentId, request.resource.data.sourceVersionId))
+                && get(incidentVersionPath(workspaceId, incidentId, request.resource.data.sourceVersionId)).data.incident.id == incidentId
+              )
+              || (
+                request.resource.data.action != 'snapshot_created'
+                && request.resource.data.action != 'version_restored'
+                && !('versionId' in request.resource.data)
+                && !('sourceVersionId' in request.resource.data)
+              )
+            );
+          allow update: if false;
+          // Audit history is immutable in Spark-only mode.
+          allow delete: if false;
+        }
+
+        match /versions/{versionId} {
+          allow get, list: if activeMember(workspaceId);
+          allow create: if activeMember(workspaceId)
+            && request.resource.data.keys().hasOnly([
+              'id', 'label', 'incident', 'revision', 'auditId',
+              'createdAt', 'createdBy', 'createdByName'
+            ])
+            && request.resource.data.id == versionId
+            && request.resource.data.label is string
+            && request.resource.data.incident.id == incidentId
+            && request.resource.data.revision is number
+            && exists(incidentPath(workspaceId, incidentId))
+            && request.resource.data.incident == get(incidentPath(workspaceId, incidentId)).data
+            && request.resource.data.revision == get(incidentPath(workspaceId, incidentId)).data.revision
+            && request.resource.data.auditId is string
+            && existsAfter(incidentAuditPath(workspaceId, incidentId, request.resource.data.auditId))
+            && getAfter(incidentAuditPath(workspaceId, incidentId, request.resource.data.auditId)).data.versionId == versionId
+            && getAfter(incidentAuditPath(workspaceId, incidentId, request.resource.data.auditId)).data.action == 'snapshot_created'
+            && getAfter(incidentAuditPath(workspaceId, incidentId, request.resource.data.auditId)).data.actorId == request.auth.uid
+            && getAfter(incidentAuditPath(workspaceId, incidentId, request.resource.data.auditId)).data.toRevision == request.resource.data.revision
+            && getAfter(incidentAuditPath(workspaceId, incidentId, request.resource.data.auditId)).data.createdAt == request.resource.data.createdAt
+            && request.resource.data.createdAt is number
+            && request.resource.data.createdBy == request.auth.uid
+            && request.resource.data.createdByName is string;
+          allow update: if false;
+          // Version history is immutable in Spark-only mode.
+          allow delete: if false;
+        }
+      }
+
+      match /incidentKeys/{keyId} {
+        allow get, list: if activeMember(workspaceId);
+        allow create, update: if activeMember(workspaceId)
+          && request.resource.data.keys().hasOnly(['incidentId', 'normalizedKey', 'active'])
+          && request.resource.data.active == true
+          && incidentKeyMatchesAfter(workspaceId);
+        allow delete: if activeMember(workspaceId)
+          && resource.data.incidentId is string
+          && (
+            !existsAfter(incidentPath(workspaceId, resource.data.incidentId))
+            || getAfter(incidentPath(workspaceId, resource.data.incidentId)).data.deletedAt > 0
+            || getAfter(incidentPath(workspaceId, resource.data.incidentId)).data.normalizedIncidentId != resource.data.normalizedKey
+          );
+      }
+
+      match /routeMasterMeta/{metaId} {
+        allow get, list: if activeMember(workspaceId);
+        allow create, update: if isAdmin(workspaceId);
+        allow delete: if false;
+      }
+
+      match /routeMasterBatches/{batchId} {
+        allow get, list: if activeMember(workspaceId);
+        allow create, update: if isAdmin(workspaceId);
+        allow delete: if isAdmin(workspaceId);
+
+        match /chunks/{chunkId} {
+          allow get, list: if activeMember(workspaceId);
+          allow create, update: if isAdmin(workspaceId);
+          allow delete: if isAdmin(workspaceId);
+        }
+      }
+
+      match /notifications/{notificationId} {
+        allow get, list: if activeMember(workspaceId);
+        allow create: if activeMember(workspaceId)
+          && request.resource.data.createdBy == request.auth.uid;
+        allow update: if activeMember(workspaceId)
+          && request.resource.data.diff(resource.data).affectedKeys()
+            .hasOnly(['readAt', 'dismissedAt']);
+        allow delete: if false;
+      }
+    }
+
+    match /workspaceInvites/{inviteCode} {
+      allow get: if emailVerified()
+        && (
+          isAdmin(resource.data.workspaceId)
+          || resource.data.email == request.auth.token.email
+        );
+      allow list: if false;
+
+      allow create: if signedIn()
+        && isAdmin(request.resource.data.workspaceId)
+        && request.resource.data.createdBy == request.auth.uid
+        && request.resource.data.status == 'pending'
+        && request.resource.data.role in ['operator', 'supervisor']
+        && request.resource.data.email is string
+        && request.resource.data.expiresAt is timestamp;
+
+      allow update: if (
+        isAdmin(resource.data.workspaceId)
+        && request.resource.data.diff(resource.data).affectedKeys()
+          .hasOnly(['status', 'revokedAt'])
+        && request.resource.data.status == 'revoked'
+      ) || (
+        emailVerified()
+        && resource.data.status == 'pending'
+        && resource.data.email == request.auth.token.email
+        && request.resource.data.status == 'joined'
+        && request.resource.data.joinedBy == request.auth.uid
+        && request.resource.data.workspaceId == resource.data.workspaceId
+        && request.resource.data.email == resource.data.email
+        && resource.data.expiresAt > request.time
+        && request.resource.data.diff(resource.data).affectedKeys()
+          .hasOnly(['status', 'joinedAt', 'joinedBy'])
+      );
+
+      allow delete: if isAdmin(resource.data.workspaceId);
+    }
+
+    match /{document=**} {
+      allow read, write: if false;
+    }
+  }
+}

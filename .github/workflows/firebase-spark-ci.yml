@@ -1,0 +1,83 @@
+name: Firebase Spark CI
+
+on:
+  push:
+    branches:
+      - 'fix/phase5-*'
+      - 'fix/phase6-*'
+      - 'fix/phase7-*'
+      - 'fix/phase8-*'
+  pull_request:
+    branches:
+      - feat/tt-editor-quick-updates
+      - feat/firebase-spark-migration
+      - 'fix/phase1-*'
+      - 'fix/phase2-*'
+      - 'fix/phase3-*'
+      - 'fix/phase4-*'
+      - 'fix/phase5-*'
+      - 'fix/phase6-*'
+      - 'fix/phase7-*'
+      - 'fix/phase8-*'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: firebase-spark-ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  verify:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Node.js 26
+        uses: actions/setup-node@v4
+        with:
+          node-version: 26
+
+      - name: Set up Java for Firebase Emulator
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: 21
+
+      - name: Install dependencies
+        working-directory: source
+        run: npm install --no-audit --no-fund
+
+      - name: TypeScript typecheck
+        working-directory: source
+        run: npm run typecheck
+
+      - name: Production build
+        working-directory: source
+        run: npm run build
+
+      - name: Firestore Security Rules tests
+        working-directory: source
+        run: npm run test:rules
+
+      - name: Client-side SLA notice tests
+        working-directory: source
+        run: npm run test:sla
+
+      - name: Offline recovery and realtime sync tests
+        working-directory: source
+        run: npm run test:recovery
+
+      - name: Firestore document payload guard tests
+        working-directory: source
+        run: npm run test:payload
+
+      - name: Stable incident pagination tests
+        working-directory: source
+        run: npm run test:pagination
+
+      - name: Firestore usage observability tests
+        working-directory: source
+        run: npm run test:usage

@@ -1,0 +1,1083 @@
+import {
+  collection,
+  doc,
+  documentId,
+  getDoc as firestoreGetDoc,
+  getDocs as firestoreGetDocs,
+  limit,
+  onSnapshot,
+  orderBy,
+  query,
+  runTransaction as firestoreRunTransaction,
+  setDoc as firestoreSetDoc,
+  startAfter,
+  writeBatch,
+  Timestamp,
+  type DocumentData,
+  type QueryDocumentSnapshot,
+  type Unsubscribe,
+} from 'firebase/firestore';
+import type { User } from 'firebase/auth';
+import { firestore } from './firebase';
+import { recordBatchWrite, recordDirectWrite, recordDocumentRead, recordListenerSnapshot, recordListenerStart, recordListenerStop, recordQueryRead, recordTransaction } from '../firestore-usage';
+import { decodeIncidentPageCursor, encodeIncidentPageCursor } from '../incident-pagination';
+import { isFirestoreIncidentPayloadSafe, measureFirestoreDocumentBytes, MAX_FIRESTORE_INCIDENT_DOCUMENT_BYTES } from '../firestore-payload';
+import {
+  defaultSettings,
+  emptyIncident,
+  newId,
+  type AuditEntry,
+  type BootstrapData,
+  type Incident,
+  type IncidentVersion,
+  type Member,
+  type Profile,
+  type Role,
+  type SettingsData,
+} from '../domain';
+
+
+// Preserve the SDK overloads at call sites while delegating through Reflect.apply.
+// Parameters<> collapses Firebase's overloads and loses the snapshot generics.
+const getDoc = ((...args: any[]) => {
+  const pending = Reflect.apply(firestoreGetDoc, undefined, args);
+  return pending.then((snapshot: Awaited<typeof pending>) => {
+    recordDocumentRead();
+    return snapshot;
+  });
+}) as typeof firestoreGetDoc;
+
+const getDocs = ((...args: any[]) => {
+  const pending = Reflect.apply(firestoreGetDocs, undefined, args);
+  return pending.then((snapshot: Awaited<typeof pending>) => {
+    recordQueryRead(snapshot.size);
+    return snapshot;
+  });
+}) as typeof firestoreGetDocs;
+
+const setDoc = ((...args: any[]) => {
+  const pending = Reflect.apply(firestoreSetDoc, undefined, args);
+  return pending.then(() => {
+    recordDirectWrite();
+  });
+}) as typeof firestoreSetDoc;
+
+const runTransaction = ((...args: any[]) => {
+  recordTransaction();
+  return Reflect.apply(firestoreRunTransaction, undefined, args);
+}) as typeof firestoreRunTransaction;
+
+const now = () => Date.now();
+const workspacePath = (workspaceId: string) => 'workspaces/' + workspaceId;
+const membersPath = (workspaceId: string) => workspacePath(workspaceId) + '/members';
+const incidentsPath = (workspaceId: string) => workspacePath(workspaceId) + '/incidents';
+const settingsPath = (workspaceId: string) => workspacePath(workspaceId) + '/settings/main';
+const auditPath = (workspaceId: string, incidentId: string) =>
+  incidentsPath(workspaceId) + '/' + incidentId + '/audit';
+const versionsPath = (workspaceId: string, incidentId: string) =>
+  incidentsPath(workspaceId) + '/' + incidentId + '/versions';
+const normalizeKey = (value: string) =>
+  value.normalize('NFKC').trim().toLowerCase().replace(/[^a-z0-9]+/g, '');
+const keyDocumentId = (value: string) => encodeURIComponent(normalizeKey(value)).replace(/\./g, '%2E');
+
+export class FirebaseRepositoryError extends Error {
+  code: string;
+  current?: Incident;
+
+  constructor(code: string, message: string, current?: Incident) {
+    super(message);
+    this.name = 'FirebaseRepositoryError';
+    this.code = code;
+    this.current = current;
+  }
+}
+
+export interface WorkspaceContext {
+  profile: Profile;
+  user: User;
+}
+
+function asProfile(data: DocumentData, uid: string): Profile {
+  return {
+    id: uid,
+    userId: uid,
+    workspaceId: String(data.workspaceId || ''),
+    role: (data.role === 'admin' || data.role === 'supervisor' ? data.role : 'operator') as Role,
+    email: String(data.email || ''),
+    name: String(data.name || data.displayName || 'NOC User'),
+  };
+}
+
+export async function ensureWorkspace(user: User): Promise<WorkspaceContext> {
+  const userRef = doc(firestore, 'users', user.uid);
+  const existing = await getDoc(userRef);
+
+  if (existing.exists()) {
+    const userData = existing.data();
+    const workspaceId = String(userData.workspaceId || '');
+    if (!workspaceId) {
+      throw new FirebaseRepositoryError(
+        'workspace_not_initialized',
+        'Profil akun belum memiliki workspace. Hubungi Admin untuk pemulihan akses.',
+      );
+    }
+    const memberRef = doc(firestore, membersPath(workspaceId), user.uid);
+    const member = await getDoc(memberRef);
+    if (!member.exists() || member.data().status === 'removed') {
+      throw new FirebaseRepositoryError(
+        'workspace_membership_missing',
+        'Akun ini tidak memiliki keanggotaan workspace yang aktif.',
+      );
+    }
+    // Workspace membership is the source of truth for role changes.
+    const profile = asProfile({ ...userData, ...member.data(), workspaceId }, user.uid);
+    return { profile, user };
+  }
+
+  const workspaceRef = doc(collection(firestore, 'workspaces'));
+  const workspaceId = workspaceRef.id;
+  const createdAt = now();
+  const profile: Profile = {
+    id: user.uid,
+    userId: user.uid,
+    workspaceId,
+    role: 'admin',
+    email: user.email || '',
+    name: user.displayName || user.email?.split('@')[0] || 'Admin NOC',
+  };
+  const memberRef = doc(firestore, membersPath(workspaceId), user.uid);
+  const settingsRef = doc(firestore, settingsPath(workspaceId));
+
+  // Re-check the user document inside the transaction so two first-login tabs
+  // cannot create orphan workspaces for the same Auth account.
+  const created = await runTransaction(firestore, async (transaction) => {
+    const latestUser = await transaction.get(userRef);
+    if (latestUser.exists()) return false;
+
+    transaction.set(workspaceRef, {
+      name: 'NOC Workspace',
+      ownerUid: user.uid,
+      createdAt,
+      updatedAt: createdAt,
+      status: 'active',
+    });
+    transaction.set(memberRef, {
+      ...profile,
+      joinedAt: createdAt,
+      status: 'active',
+    });
+    transaction.set(userRef, {
+      uid: user.uid,
+      workspaceId,
+      role: 'admin',
+      email: user.email || '',
+      name: profile.name,
+      photoURL: user.photoURL || '',
+      createdAt,
+      updatedAt: createdAt,
+    });
+    transaction.set(settingsRef, {
+      ...defaultSettings,
+      updatedAt: createdAt,
+      updatedBy: user.uid,
+    });
+    return true;
+  });
+
+  if (!created) return ensureWorkspace(user);
+  return { profile, user };
+}
+
+export function normalizeIncidentSnapshot(value: DocumentData, id: string): Incident {
+  const base = emptyIncident(String(value.reporter || ''));
+  const defined = Object.fromEntries(Object.entries(value).filter(([, field]) => field !== undefined));
+  const merged = { ...base, ...defined } as Incident;
+  const checklist = value.checklist && typeof value.checklist === 'object' && !Array.isArray(value.checklist)
+    ? value.checklist as Partial<Incident['checklist']>
+    : {};
+  return {
+    ...merged,
+    id,
+    identityMode: value.identityMode === 'b2b' ? 'b2b' : 'standard',
+    status: typeof value.status === 'string' ? value.status as Incident['status'] : base.status,
+    severity: typeof value.severity === 'string' ? value.severity as Incident['severity'] : base.severity,
+    condition: typeof value.condition === 'string' ? value.condition as Incident['condition'] : base.condition,
+    occurTime: typeof value.occurTime === 'string' ? value.occurTime : '',
+    progress: Array.isArray(value.progress) ? value.progress as Incident['progress'] : [],
+    impacts: Array.isArray(value.impacts) ? value.impacts as Incident['impacts'] : [],
+    cutPoints: Array.isArray(value.cutPoints) ? value.cutPoints as Incident['cutPoints'] : [],
+    geoCoordinates: Array.isArray(value.geoCoordinates) ? value.geoCoordinates as Incident['geoCoordinates'] : [],
+    attachments: Array.isArray(value.attachments) ? value.attachments : [],
+    checklist: { ...base.checklist, ...checklist },
+    revision: Number(value.revision) > 0 ? Number(value.revision) : 1,
+    createdAt: Number(value.createdAt) || 0,
+    updatedAt: Number(value.updatedAt) || Number(value.createdAt) || 0,
+    deletedAt: Number(value.deletedAt) || 0,
+  };
+}
+
+export async function bootstrapWorkspace(user: User): Promise<BootstrapData> {
+  const context = await ensureWorkspace(user);
+  const workspaceId = context.profile.workspaceId;
+
+  const [incidentSnapshot, memberSnapshot, settingsSnapshot] = await Promise.all([
+    getDocs(query(collection(firestore, incidentsPath(workspaceId)), orderBy('updatedAt', 'desc'), orderBy(documentId(), 'desc'), limit(100))),
+    getDocs(query(collection(firestore, membersPath(workspaceId)), orderBy('joinedAt', 'asc'), limit(100))),
+    getDoc(doc(firestore, settingsPath(workspaceId))),
+  ]);
+
+  const incidents = incidentSnapshot.docs.map((snapshot) => normalizeIncidentSnapshot(snapshot.data(), snapshot.id));
+  const members = memberSnapshot.docs
+    .filter((snapshot) => snapshot.data().status !== 'removed')
+    .map((snapshot) => ({ ...snapshot.data(), id: snapshot.id })) as Member[];
+  const settings = settingsSnapshot.exists()
+    ? ({ ...defaultSettings, ...settingsSnapshot.data(), id: settingsSnapshot.id } as SettingsData)
+    : { ...defaultSettings };
+
+  return {
+    profile: context.profile,
+    members,
+    incidents,
+    incidentsNextToken: incidentSnapshot.docs.length === 100
+      ? encodeIncidentPageCursor({
+          updatedAt: Number(incidentSnapshot.docs[incidentSnapshot.docs.length - 1].data().updatedAt) || 0,
+          id: incidentSnapshot.docs[incidentSnapshot.docs.length - 1].id,
+        })
+      : null,
+    settings,
+  };
+}
+
+export async function loadIncidentPage(
+  workspaceId: string,
+  nextToken: string,
+): Promise<{ incidents: Incident[]; nextToken: string | null }> {
+  const cursor = decodeIncidentPageCursor(nextToken);
+  if (!cursor) {
+    throw new FirebaseRepositoryError('invalid_page_cursor', 'Cursor halaman incident tidak valid. Muat ulang daftar incident.');
+  }
+  const snapshot = await getDocs(
+    query(
+      collection(firestore, incidentsPath(workspaceId)),
+      orderBy('updatedAt', 'desc'),
+      orderBy(documentId(), 'desc'),
+      startAfter(cursor.updatedAt, cursor.id),
+      limit(100),
+    ),
+  );
+  const last = snapshot.docs[snapshot.docs.length - 1];
+  return {
+    incidents: snapshot.docs.map((item) => normalizeIncidentSnapshot(item.data(), item.id)),
+    nextToken: snapshot.docs.length === 100 && last
+      ? encodeIncidentPageCursor({ updatedAt: Number(last.data().updatedAt) || 0, id: last.id })
+      : null,
+  };
+}
+
+function incidentKeyRef(workspaceId: string, incidentId: string) {
+  return doc(firestore, workspacePath(workspaceId) + '/incidentKeys', keyDocumentId(incidentId));
+}
+
+function changedFields(before: Incident | null, after: Incident): string[] {
+  if (!before) return Object.keys(after);
+  const keys = new Set([...Object.keys(before), ...Object.keys(after)]);
+  return [...keys].filter((key) =>
+    JSON.stringify((before as unknown as Record<string, unknown>)[key]) !==
+    JSON.stringify((after as unknown as Record<string, unknown>)[key]),
+  );
+}
+
+type IncidentRole = Role;
+
+function progressIds(value: unknown): string[] {
+  return Array.isArray(value)
+    ? value.map((row) => String((row as { id?: unknown })?.id || '').trim())
+    : [];
+}
+
+function progressHistoryChangeIsValid(beforeValue: unknown, afterValue: unknown): boolean {
+  const beforeIds = progressIds(beforeValue);
+  const afterIds = progressIds(afterValue);
+  if (beforeIds.some((id) => !id) || new Set(beforeIds).size !== beforeIds.length) return false;
+  if (afterIds.some((id) => !id) || new Set(afterIds).size !== afterIds.length) return false;
+
+  const beforeSet = new Set(beforeIds);
+  const afterSet = new Set(afterIds);
+  const retainedBefore = beforeIds.filter((id) => afterSet.has(id));
+  const retainedAfter = afterIds.filter((id) => beforeSet.has(id));
+  if (retainedBefore.length !== retainedAfter.length
+    || retainedBefore.some((id, index) => id !== retainedAfter[index])) return false;
+
+  const firstNewIndex = afterIds.findIndex((id) => !beforeSet.has(id));
+  return firstNewIndex < 0 || !afterIds.slice(firstNewIndex).some((id) => beforeSet.has(id));
+}
+
+function statusTransitionError(current: Incident, next: Incident, role: IncidentRole): string {
+  if (current.status === next.status) return '';
+  const allowed: Record<string, string[]> = {
+    Draft: ['Open', 'Cancel'],
+    Open: ['Monitoring', 'Resolved', 'Cancel'],
+    Monitoring: ['Open', 'Resolved', 'Cancel'],
+    Resolved: ['Closed', 'Open'],
+    Closed: ['Open'],
+    Cancel: ['Open'],
+  };
+  if (!(allowed[current.status] || []).includes(next.status)) return 'invalid_status_transition';
+  const operatorAllowed =
+    (current.status === 'Draft' && next.status === 'Open')
+    || (current.status === 'Open' && next.status === 'Monitoring')
+    || (current.status === 'Monitoring' && next.status === 'Open');
+  if (role === 'operator' && !operatorAllowed) return 'supervisor_required_to_close';
+  if (['Resolved', 'Closed', 'Cancel'].includes(current.status)
+    && next.status === 'Open'
+    && !next.reopenReason.trim()) return 'reopen_reason_required';
+  return '';
+}
+
+function validateIncidentPayload(incident: Incident, current?: Incident): string {
+  if (incident.status !== 'Draft') {
+    if (incident.identityMode === 'b2b') {
+      if (!incident.b2bTitle.trim()) return 'b2b_title_required';
+    } else {
+      const legacyIdentity = Boolean(current && (
+        current.incidentId.trim()
+        || (current.group.trim() && current.linkA.trim() && current.linkB.trim())
+      ));
+      if (!incident.titleOverride.trim() && !legacyIdentity) return 'title_required';
+    }
+  }
+
+  const occurAt = Date.parse(incident.occurTime || '');
+  const dispatchAt = Date.parse(incident.dispatchTime || '');
+  const closedAt = Date.parse(incident.closedTime || '');
+  if (Number.isFinite(dispatchAt) && Number.isFinite(occurAt) && dispatchAt < occurAt) {
+    return 'dispatch_before_occur';
+  }
+
+  const latestProgressAt = (incident.progress || []).reduce((latest, row) => {
+    const parsed = Date.parse(`${row.date}T${row.time}`);
+    return Number.isFinite(parsed) ? Math.max(latest, parsed) : latest;
+  }, 0);
+  if (Number.isFinite(closedAt) && latestProgressAt && closedAt < latestProgressAt) {
+    return 'closed_before_latest_progress';
+  }
+
+  if (incident.status === 'Resolved' || incident.status === 'Closed') {
+    if (!(incident.progress || []).some((row) => /normal|closed|clear|recovered|recovery/i.test(row.text || ''))) {
+      return 'recovery_update_required';
+    }
+  }
+
+  if (incident.status === 'Closed') {
+    const checklist = incident.checklist;
+    if (!incident.closedTime) return 'closed_time_required';
+    if (!checklist || !['statementWag', 'ticketStatus', 'photo', 'rfo', 'closedEmail'].every((key) =>
+      Boolean(checklist[key as keyof typeof checklist]))) return 'closing_checklist_incomplete';
+    if (!incident.closingEvidenceNote.trim()) return 'closing_evidence_required';
+  }
+
+  if (current?.deletedAt) return 'incident_in_trash';
+  return '';
+}
+
+function normalizeIncidentRecord(
+  value: Partial<Incident>,
+  user: User,
+  previous?: Incident,
+): Incident {
+  const timestamp = now();
+  const id = previous?.id || value.id || newId();
+  return {
+    ...(value as Incident),
+    id,
+    attachments: previous?.attachments || [],
+    createdAt: previous?.createdAt || timestamp,
+    createdBy: previous?.createdBy || user.uid,
+    updatedAt: timestamp,
+    updatedBy: user.uid,
+    revision: previous ? previous.revision + 1 : 1,
+    progress: Array.isArray(value.progress) ? value.progress.slice(-500) : previous?.progress || [],
+    impacts: Array.isArray(value.impacts) ? value.impacts.slice(0, 200) : previous?.impacts || [],
+    cutPoints: Array.isArray(value.cutPoints) ? value.cutPoints.slice(0, 20) : previous?.cutPoints || [],
+    geoCoordinates: Array.isArray(value.geoCoordinates) ? value.geoCoordinates.slice(0, 20) : previous?.geoCoordinates || [],
+  };
+}
+
+export async function createIncident(
+  workspaceId: string,
+  user: User,
+  value: Partial<Incident>,
+): Promise<Incident> {
+  const id = newId();
+  const incident = normalizeIncidentRecord({ ...value, id }, user);
+  const payload = { ...incident, normalizedIncidentId: normalizeKey(incident.incidentId) };
+  if (!isFirestoreIncidentPayloadSafe(payload)) {
+    const sizeKb = Math.ceil(measureFirestoreDocumentBytes(payload) / 1024);
+    throw new FirebaseRepositoryError('incident_payload_too_large', `Data incident ${sizeKb} KiB melebihi batas aman ${Math.round(MAX_FIRESTORE_INCIDENT_DOCUMENT_BYTES / 1024)} KiB. Ringkas progress atau teks yang terlalu panjang sebelum menyimpan.`);
+  }
+  const validationError = validateIncidentPayload(incident);
+  if (validationError) {
+    throw new FirebaseRepositoryError(validationError, 'Data incident belum memenuhi validasi workflow.');
+  }
+  const incidentRef = doc(firestore, incidentsPath(workspaceId), id);
+  const auditRef = doc(collection(firestore, auditPath(workspaceId, id)));
+  const normalized = normalizeKey(incident.incidentId);
+  const keyRef = normalized ? incidentKeyRef(workspaceId, incident.incidentId) : null;
+
+  await runTransaction(firestore, async (transaction) => {
+    if (keyRef) {
+      const keySnapshot = await transaction.get(keyRef);
+      if (keySnapshot.exists()) {
+        throw new FirebaseRepositoryError('duplicate_incident_id', 'Incident ID sudah digunakan.');
+      }
+    }
+    transaction.set(incidentRef, { ...incident, normalizedIncidentId: normalized });
+    transaction.set(auditRef, {
+      action: 'created',
+      summary: 'Incident dibuat',
+      changedFields: Object.keys(incident),
+      fromRevision: 0,
+      toRevision: 1,
+      actorId: user.uid,
+      actorName: user.displayName || user.email || 'NOC User',
+      createdAt: now(),
+    });
+    if (keyRef) {
+      transaction.set(keyRef, { incidentId: id, normalizedKey: normalized, active: true });
+    }
+  });
+  return incident;
+}
+
+export async function saveIncident(
+  workspaceId: string,
+  user: User,
+  value: Incident,
+  auditContext: { action?: string; summary?: string; sourceVersionId?: string } = {},
+): Promise<Incident> {
+  const incidentRef = doc(firestore, incidentsPath(workspaceId), value.id);
+  const auditRef = doc(collection(firestore, auditPath(workspaceId, value.id)));
+  const nextNormalized = normalizeKey(value.incidentId);
+
+  return runTransaction(firestore, async (transaction) => {
+    const [currentSnapshot, memberSnapshot] = await Promise.all([
+      transaction.get(incidentRef),
+      transaction.get(doc(firestore, membersPath(workspaceId), user.uid)),
+    ]);
+    if (!currentSnapshot.exists()) {
+      throw new FirebaseRepositoryError('incident_not_found', 'Incident tidak ditemukan.');
+    }
+    if (!memberSnapshot.exists() || memberSnapshot.data().status !== 'active') {
+      throw new FirebaseRepositoryError('workspace_membership_missing', 'Keanggotaan workspace tidak aktif.');
+    }
+
+    const current = normalizeIncidentSnapshot(currentSnapshot.data(), currentSnapshot.id);
+    if (current.deletedAt) {
+      throw new FirebaseRepositoryError('incident_in_trash', 'Incident berada di Trash.');
+    }
+    if (value.revision !== current.revision) {
+      throw new FirebaseRepositoryError('revision_conflict', 'Data incident sudah berubah di perangkat lain.', current);
+    }
+
+    const role = memberSnapshot.data().role as Role;
+    const next = normalizeIncidentRecord(value, user, current);
+    const transitionError = statusTransitionError(current, next, role);
+    if (transitionError) {
+      throw new FirebaseRepositoryError(transitionError, 'Perubahan status tidak sesuai workflow atau role akun.');
+    }
+    if (!progressHistoryChangeIsValid(current.progress, next.progress)) {
+      throw new FirebaseRepositoryError('progress_history_immutable', 'Urutan progress lama tidak boleh diubah; update baru harus ditambahkan di akhir timeline.');
+    }
+    const payload = { ...next, normalizedIncidentId: nextNormalized };
+    if (!isFirestoreIncidentPayloadSafe(payload)) {
+      const sizeKb = Math.ceil(measureFirestoreDocumentBytes(payload) / 1024);
+      throw new FirebaseRepositoryError('incident_payload_too_large', `Data incident ${sizeKb} KiB melebihi batas aman ${Math.round(MAX_FIRESTORE_INCIDENT_DOCUMENT_BYTES / 1024)} KiB. Ringkas progress atau teks yang terlalu panjang sebelum menyimpan.`, current);
+    }
+    const validationError = validateIncidentPayload(next, current);
+    if (validationError) {
+      throw new FirebaseRepositoryError(validationError, 'Data incident belum memenuhi validasi workflow.');
+    }
+
+    const previousNormalized = normalizeKey(current.incidentId);
+    const nextKeyRef = nextNormalized ? incidentKeyRef(workspaceId, value.incidentId) : null;
+    const previousKeyRef = previousNormalized ? incidentKeyRef(workspaceId, current.incidentId) : null;
+
+    let nextKeySnapshot = null;
+    let previousKeySnapshot = null;
+    if (nextKeyRef && nextNormalized !== previousNormalized) {
+      nextKeySnapshot = await transaction.get(nextKeyRef);
+      if (nextKeySnapshot.exists() && nextKeySnapshot.data().incidentId !== value.id) {
+        throw new FirebaseRepositoryError('duplicate_incident_id', 'Incident ID sudah digunakan.');
+      }
+    }
+    if (previousKeyRef && previousNormalized !== nextNormalized) {
+      previousKeySnapshot = await transaction.get(previousKeyRef);
+    }
+
+    const fields = changedFields(current, next);
+    transaction.set(incidentRef, { ...next, normalizedIncidentId: nextNormalized });
+    transaction.set(auditRef, {
+      action: auditContext.action || 'updated',
+      summary: auditContext.summary || 'Incident diperbarui',
+      changedFields: fields,
+      fromRevision: current.revision,
+      toRevision: next.revision,
+      ...(auditContext.sourceVersionId ? { sourceVersionId: auditContext.sourceVersionId } : {}),
+      actorId: user.uid,
+      actorName: user.displayName || user.email || 'NOC User',
+      createdAt: now(),
+    });
+    if (previousKeyRef && previousKeySnapshot?.exists()) transaction.delete(previousKeyRef);
+    if (nextKeyRef) transaction.set(nextKeyRef, { incidentId: value.id, normalizedKey: nextNormalized, active: true });
+    return next;
+  });
+}
+
+export async function softDeleteIncident(
+  workspaceId: string,
+  user: User,
+  incidentId: string,
+  reason = '',
+): Promise<Incident> {
+  const reference = doc(firestore, incidentsPath(workspaceId), incidentId);
+  const auditRef = doc(collection(firestore, auditPath(workspaceId, incidentId)));
+  return runTransaction(firestore, async (transaction) => {
+    const snapshot = await transaction.get(reference);
+    if (!snapshot.exists()) throw new FirebaseRepositoryError('incident_not_found', 'Incident tidak ditemukan.');
+    const current = normalizeIncidentSnapshot(snapshot.data(), snapshot.id);
+    if (current.deletedAt) throw new FirebaseRepositoryError('incident_already_in_trash', 'Incident sudah berada di Trash.');
+    const keyRef = current.incidentId.trim()
+      ? incidentKeyRef(workspaceId, current.incidentId)
+      : null;
+    const keySnapshot = keyRef ? await transaction.get(keyRef) : null;
+    const next = {
+      ...current,
+      deletedAt: now(),
+      deletedBy: user.uid,
+      deleteReason: reason,
+      updatedAt: now(),
+      updatedBy: user.uid,
+      revision: current.revision + 1,
+    };
+    transaction.set(reference, next);
+    if (keyRef && keySnapshot?.exists()) transaction.delete(keyRef);
+    transaction.set(auditRef, {
+      action: 'deleted',
+      summary: 'Incident dipindahkan ke Trash',
+      changedFields: ['deletedAt', 'deletedBy', 'deleteReason'],
+      fromRevision: current.revision,
+      toRevision: next.revision,
+      actorId: user.uid,
+      actorName: user.displayName || user.email || 'NOC User',
+      createdAt: now(),
+    });
+    return next;
+  });
+}
+
+export async function restoreIncident(
+  workspaceId: string,
+  user: User,
+  incidentId: string,
+): Promise<Incident> {
+  const reference = doc(firestore, incidentsPath(workspaceId), incidentId);
+  const auditRef = doc(collection(firestore, auditPath(workspaceId, incidentId)));
+  return runTransaction(firestore, async (transaction) => {
+    const snapshot = await transaction.get(reference);
+    if (!snapshot.exists()) throw new FirebaseRepositoryError('trashed_incident_not_found', 'Incident tidak ditemukan.');
+    const current = normalizeIncidentSnapshot(snapshot.data(), snapshot.id);
+    if (!current.deletedAt) throw new FirebaseRepositoryError('incident_not_in_trash', 'Incident tidak berada di Trash.');
+
+    const keyRef = current.incidentId.trim() ? incidentKeyRef(workspaceId, current.incidentId) : null;
+    const keySnapshot = keyRef ? await transaction.get(keyRef) : null;
+    if (keySnapshot?.exists() && keySnapshot.data().incidentId !== incidentId) {
+      throw new FirebaseRepositoryError('duplicate_incident_id', 'Incident ID sudah digunakan oleh incident lain.');
+    }
+
+    const next = {
+      ...current,
+      deletedAt: 0,
+      deletedBy: '',
+      deleteReason: '',
+      updatedAt: now(),
+      updatedBy: user.uid,
+      revision: current.revision + 1,
+    };
+    transaction.set(reference, { ...next, normalizedIncidentId: normalizeKey(next.incidentId) });
+    if (keyRef) {
+      transaction.set(keyRef, {
+        incidentId,
+        normalizedKey: normalizeKey(next.incidentId),
+        active: true,
+      });
+    }
+    transaction.set(auditRef, {
+      action: 'restored',
+      summary: 'Incident dipulihkan dari Trash',
+      changedFields: ['deletedAt', 'deletedBy', 'deleteReason'],
+      fromRevision: current.revision,
+      toRevision: next.revision,
+      actorId: user.uid,
+      actorName: user.displayName || user.email || 'NOC User',
+      createdAt: now(),
+    });
+    return next;
+  });
+}
+
+export async function purgeIncident(workspaceId: string, incidentId: string): Promise<void> {
+  const reference = doc(firestore, incidentsPath(workspaceId), incidentId);
+  const snapshot = await getDoc(reference);
+  if (!snapshot.exists()) return;
+
+  const incident = normalizeIncidentSnapshot(snapshot.data(), incidentId);
+  if (!incident.deletedAt) {
+    throw new FirebaseRepositoryError(
+      'incident_must_be_trashed',
+      'Pindahkan incident ke Trash sebelum menghapus permanen.',
+    );
+  }
+
+  // Firestore Security Rules cannot verify that every document in arbitrary
+  // subcollections has been deleted. A client-side cascade could therefore
+  // leave orphaned audit/version records after a partial failure. Keep the
+  // record in Trash until a trusted purge workflow is available.
+  throw new FirebaseRepositoryError(
+    'permanent_purge_unavailable',
+    'Penghapusan permanen dinonaktifkan pada mode Firebase Spark-only. Incident tetap tersimpan di Trash agar audit dan version history tidak terhapus sebagian.',
+  );
+}
+
+export async function duplicateIncident(
+  workspaceId: string,
+  user: User,
+  sourceId: string,
+): Promise<Incident> {
+  const snapshot = await getDoc(doc(firestore, incidentsPath(workspaceId), sourceId));
+  if (!snapshot.exists()) throw new FirebaseRepositoryError('incident_not_found', 'Incident tidak ditemukan.');
+  const source = normalizeIncidentSnapshot(snapshot.data(), snapshot.id);
+  const copy: Partial<Incident> = {
+    ...source,
+    id: undefined,
+    status: 'Draft',
+    incidentId: '',
+    mduTicket: '',
+    closedTime: '',
+    resolvedAt: 0,
+    resolvedBy: '',
+    deletedAt: 0,
+    deletedBy: '',
+    deleteReason: '',
+    attachments: [],
+    progress: [],
+  };
+  return createIncident(workspaceId, user, copy);
+}
+
+export async function readVersions(workspaceId: string, incidentId: string): Promise<IncidentVersion[]> {
+  const snapshot = await getDocs(
+    query(collection(firestore, versionsPath(workspaceId, incidentId)), orderBy('createdAt', 'desc'), limit(50)),
+  );
+  return snapshot.docs.map((item) => ({ ...item.data(), id: item.id })) as IncidentVersion[];
+}
+
+export async function readAudit(workspaceId: string, incidentId: string): Promise<AuditEntry[]> {
+  const snapshot = await getDocs(
+    query(collection(firestore, auditPath(workspaceId, incidentId)), orderBy('createdAt', 'desc'), limit(100)),
+  );
+  return snapshot.docs.map((item) => ({ ...item.data(), id: item.id })) as AuditEntry[];
+}
+
+export async function createVersion(
+  workspaceId: string,
+  user: User,
+  incidentId: string,
+  label: string,
+  expectedRevision: number,
+): Promise<IncidentVersion> {
+  const incidentRef = doc(firestore, incidentsPath(workspaceId), incidentId);
+  const versionRef = doc(collection(firestore, versionsPath(workspaceId, incidentId)));
+  const auditRef = doc(collection(firestore, auditPath(workspaceId, incidentId)));
+  return runTransaction(firestore, async (transaction) => {
+    const [incidentSnapshot, memberSnapshot] = await Promise.all([
+      transaction.get(incidentRef),
+      transaction.get(doc(firestore, membersPath(workspaceId), user.uid)),
+    ]);
+    if (!incidentSnapshot.exists()) {
+      throw new FirebaseRepositoryError('incident_not_found', 'Incident tidak ditemukan.');
+    }
+    if (!memberSnapshot.exists() || memberSnapshot.data().status !== 'active') {
+      throw new FirebaseRepositoryError('workspace_membership_missing', 'Keanggotaan workspace tidak aktif.');
+    }
+    const incident = normalizeIncidentSnapshot(incidentSnapshot.data(), incidentSnapshot.id);
+    if (incident.deletedAt) {
+      throw new FirebaseRepositoryError('incident_in_trash', 'Incident di Trash tidak dapat dibuatkan snapshot.');
+    }
+    if (incident.revision !== expectedRevision) {
+      throw new FirebaseRepositoryError('revision_conflict', 'Incident berubah sebelum snapshot dibuat.', incident);
+    }
+    const createdAt = now();
+    const auditId = auditRef.id;
+    const version: IncidentVersion = {
+      id: versionRef.id,
+      label: label.slice(0, 180),
+      // Store the exact persisted document shape so Security Rules can verify
+      // the snapshot matches the incident read in this transaction.
+      incident: { ...incidentSnapshot.data(), id: incidentSnapshot.id } as Incident,
+      revision: incident.revision,
+      auditId,
+      createdAt,
+      createdBy: user.uid,
+      createdByName: user.displayName || user.email || 'NOC User',
+    };
+    transaction.set(versionRef, version);
+    transaction.set(auditRef, {
+      action: 'snapshot_created',
+      summary: 'Version snapshot dibuat',
+      changedFields: [],
+      fromRevision: incident.revision,
+      toRevision: incident.revision,
+      versionId: versionRef.id,
+      actorId: user.uid,
+      actorName: user.displayName || user.email || 'NOC User',
+      createdAt,
+    });
+    return version;
+  });
+}
+
+export async function restoreVersion(
+  workspaceId: string,
+  user: User,
+  incidentId: string,
+  versionId: string,
+): Promise<Incident> {
+  const versionSnapshot = await getDoc(doc(firestore, versionsPath(workspaceId, incidentId), versionId));
+  if (!versionSnapshot.exists()) throw new FirebaseRepositoryError('version_not_found', 'Version tidak ditemukan.');
+  const version = versionSnapshot.data() as IncidentVersion;
+  const currentSnapshot = await getDoc(doc(firestore, incidentsPath(workspaceId), incidentId));
+  if (!currentSnapshot.exists()) throw new FirebaseRepositoryError('incident_not_found', 'Incident tidak ditemukan.');
+  const current = normalizeIncidentSnapshot(currentSnapshot.data(), incidentId);
+  const versionIncident = normalizeIncidentSnapshot(version.incident as unknown as DocumentData, incidentId);
+  if (versionIncident.id !== incidentId) {
+    throw new FirebaseRepositoryError('version_incident_mismatch', 'Snapshot tidak cocok dengan incident yang dipilih.');
+  }
+  // Progress is an append-only operational record. Restoring an older
+  // snapshot must not erase timeline entries added after that snapshot.
+  const restored = {
+    ...versionIncident,
+    id: incidentId,
+    revision: current.revision,
+    progress: current.progress,
+  };
+  return saveIncident(workspaceId, user, restored, {
+    action: 'version_restored',
+    summary: 'Incident dipulihkan dari version snapshot',
+    sourceVersionId: versionId,
+  });
+}
+
+export async function saveSettings(
+  workspaceId: string,
+  user: User,
+  value: SettingsData,
+): Promise<SettingsData> {
+  const next = {
+    ...defaultSettings,
+    ...value,
+    updatedAt: now(),
+    updatedBy: user.uid,
+  };
+  await setDoc(doc(firestore, settingsPath(workspaceId)), next);
+  return next;
+}
+
+export async function getRouteMaster(workspaceId: string): Promise<{ items: Array<{ systemKey: string; routeSegment: string }>; meta: Record<string, unknown> | null }> {
+  const metaSnapshot = await getDoc(doc(firestore, workspacePath(workspaceId) + '/routeMasterMeta/main'));
+  if (!metaSnapshot.exists()) return { items: [], meta: null };
+  const meta = metaSnapshot.data();
+  const batchId = String(meta.currentBatchId || '');
+  if (!batchId) return { items: [], meta };
+  const chunksSnapshot = await getDocs(
+    query(
+      collection(firestore, workspacePath(workspaceId) + '/routeMasterBatches/' + batchId + '/chunks'),
+      orderBy('chunkIndex', 'asc'),
+      limit(60),
+    ),
+  );
+  const items = chunksSnapshot.docs.flatMap((item) =>
+    Array.isArray(item.data().items) ? item.data().items : [],
+  ) as Array<{ systemKey: string; routeSegment: string }>;
+  return { items, meta };
+}
+
+export async function startRouteMasterImport(workspaceId: string, user: User): Promise<string> {
+  const batchId = newId();
+  await setDoc(doc(firestore, workspacePath(workspaceId) + '/routeMasterBatches', batchId), {
+    createdAt: now(),
+    createdBy: user.uid,
+    status: 'staging',
+  });
+  return batchId;
+}
+
+export async function addRouteMasterChunk(
+  workspaceId: string,
+  batchId: string,
+  chunkIndex: number,
+  items: Array<{ systemKey: string; routeSegment: string }>,
+  user: User,
+): Promise<void> {
+  if (items.length > 400) throw new FirebaseRepositoryError('route_master_chunk_too_large', 'Maksimal 400 mapping per batch.');
+  await setDoc(
+    doc(firestore, workspacePath(workspaceId) + '/routeMasterBatches/' + batchId + '/chunks', String(chunkIndex).padStart(4, '0')),
+    { chunkIndex, items, createdAt: now(), createdBy: user.uid },
+  );
+}
+
+export async function commitRouteMasterImport(
+  workspaceId: string,
+  user: User,
+  batchId: string,
+  metadata: Record<string, unknown>,
+): Promise<void> {
+  const chunks = await getDocs(
+    query(
+      collection(firestore, workspacePath(workspaceId) + '/routeMasterBatches/' + batchId + '/chunks'),
+      orderBy('chunkIndex', 'asc'),
+      limit(60),
+    ),
+  );
+  const count = chunks.docs.reduce((total, item) => total + (Array.isArray(item.data().items) ? item.data().items.length : 0), 0);
+  if (!count || count > 20000) throw new FirebaseRepositoryError('route_master_invalid_count', 'Jumlah mapping route master tidak valid.');
+  const batch = writeBatch(firestore);
+  batch.update(doc(firestore, workspacePath(workspaceId) + '/routeMasterBatches', batchId), {
+    status: 'committed',
+    committedAt: now(),
+    count,
+  });
+  batch.set(doc(firestore, workspacePath(workspaceId) + '/routeMasterMeta/main'), {
+    ...metadata,
+    count,
+    currentBatchId: batchId,
+    updatedAt: now(),
+    updatedBy: user.uid,
+    updatedByName: user.displayName || user.email || '',
+  });
+  recordBatchWrite(2);
+  await batch.commit();
+}
+
+export async function createInvite(
+  workspaceId: string,
+  user: User,
+  email: string,
+  role: Role,
+): Promise<string> {
+  const codeBytes = new Uint8Array(18);
+  crypto.getRandomValues(codeBytes);
+  const code = [...codeBytes].map((value) => value.toString(16).padStart(2, '0')).join('');
+  await setDoc(doc(firestore, 'workspaceInvites', code), {
+    workspaceId,
+    email: email.trim().toLowerCase(),
+    role: role === 'supervisor' ? 'supervisor' : 'operator',
+    status: 'pending',
+    createdAt: now(),
+    expiresAt: Timestamp.fromMillis(now() + 7 * 24 * 60 * 60 * 1000),
+    createdBy: user.uid,
+  });
+  return code;
+}
+
+export async function getInvite(code: string, user: User | null): Promise<{ status: string; error?: string }> {
+  if (!user) return { status: 'Login required' };
+  const snapshot = await getDoc(doc(firestore, 'workspaceInvites', code));
+  if (!snapshot.exists()) throw new FirebaseRepositoryError('invite_not_found', 'Undangan tidak ditemukan.');
+  const invite = snapshot.data();
+  if (invite.status !== 'pending') throw new FirebaseRepositoryError('invite_revoked', 'Undangan sudah digunakan atau dicabut.');
+  const inviteExpiresAt = invite.expiresAt instanceof Timestamp
+      ? invite.expiresAt.toMillis()
+      : Number(invite.expiresAt);
+    if (!Number.isFinite(inviteExpiresAt) || inviteExpiresAt < now()) {
+      throw new FirebaseRepositoryError('invite_expired', 'Undangan sudah kedaluwarsa.');
+    }
+  if (String(invite.email).toLowerCase() !== String(user.email || '').toLowerCase()) {
+    throw new FirebaseRepositoryError('invite_not_allowed', 'Undangan hanya berlaku untuk email yang dituju.');
+  }
+  return { status: 'Invitation ready' };
+}
+
+export async function joinWorkspace(code: string, user: User): Promise<void> {
+  const inviteRef = doc(firestore, 'workspaceInvites', code);
+  await runTransaction(firestore, async (transaction) => {
+    const inviteSnapshot = await transaction.get(inviteRef);
+    if (!inviteSnapshot.exists()) throw new FirebaseRepositoryError('invite_not_found', 'Undangan tidak ditemukan.');
+    const invite = inviteSnapshot.data();
+    if (invite.status !== 'pending') throw new FirebaseRepositoryError('invite_revoked', 'Undangan tidak lagi aktif.');
+    const inviteExpiresAt = invite.expiresAt instanceof Timestamp
+      ? invite.expiresAt.toMillis()
+      : Number(invite.expiresAt);
+    if (!Number.isFinite(inviteExpiresAt) || inviteExpiresAt < now()) {
+      throw new FirebaseRepositoryError('invite_expired', 'Undangan sudah kedaluwarsa.');
+    }
+    if (String(invite.email).toLowerCase() !== String(user.email || '').toLowerCase()) {
+      throw new FirebaseRepositoryError('invite_not_allowed', 'Undangan hanya berlaku untuk email yang dituju.');
+    }
+
+    const workspaceId = String(invite.workspaceId || '');
+    const memberRef = doc(firestore, membersPath(workspaceId), user.uid);
+    const userRef = doc(firestore, 'users', user.uid);
+    const [memberSnapshot, userSnapshot] = await Promise.all([
+      transaction.get(memberRef),
+      transaction.get(userRef),
+    ]);
+
+    if (memberSnapshot.exists() && memberSnapshot.data().status !== 'removed') {
+      throw new FirebaseRepositoryError('account_already_has_workspace', 'Akun sudah menjadi anggota aktif workspace ini.');
+    }
+    if (userSnapshot.exists() && String(userSnapshot.data().workspaceId || '') !== workspaceId) {
+      throw new FirebaseRepositoryError('account_already_has_workspace', 'Akun sudah terhubung ke workspace lain.');
+    }
+
+    const joinedAt = now();
+    const role: Role = invite.role === 'supervisor' ? 'supervisor' : 'operator';
+    const name = user.displayName || user.email?.split('@')[0] || 'NOC User';
+    const memberData = {
+      userId: user.uid,
+      workspaceId,
+      role,
+      email: user.email || '',
+      name,
+      joinedAt,
+      status: 'active',
+      inviteCode: code,
+    };
+
+    if (memberSnapshot.exists()) {
+      transaction.update(memberRef, {
+        role,
+        email: memberData.email,
+        name,
+        joinedAt,
+        status: 'active',
+        inviteCode: code,
+        removedAt: null,
+      });
+    } else {
+      transaction.set(memberRef, {
+        ...memberData,
+        createdAt: joinedAt,
+      });
+    }
+
+    if (userSnapshot.exists()) {
+      transaction.update(userRef, {
+        name,
+        photoURL: user.photoURL || '',
+        updatedAt: joinedAt,
+      });
+    } else {
+      transaction.set(userRef, {
+        uid: user.uid,
+        workspaceId,
+        role,
+        email: user.email || '',
+        name,
+        photoURL: user.photoURL || '',
+        createdAt: joinedAt,
+        updatedAt: joinedAt,
+      });
+    }
+
+    transaction.update(inviteRef, {
+      status: 'joined',
+      joinedAt,
+      joinedBy: user.uid,
+    });
+  });
+}
+
+export async function updateMemberRole(
+  workspaceId: string,
+  memberId: string,
+  role: Role,
+): Promise<void> {
+  if (role === 'admin') throw new FirebaseRepositoryError('admin_role_assignment_blocked', 'Role Admin tidak diberikan melalui undangan atau perubahan role biasa.');
+  await setDoc(doc(firestore, membersPath(workspaceId), memberId), { role }, { merge: true });
+}
+
+export async function removeMember(workspaceId: string, memberId: string): Promise<void> {
+  await setDoc(doc(firestore, membersPath(workspaceId), memberId), {
+    status: 'removed',
+    removedAt: now(),
+  }, { merge: true });
+}
+
+export function subscribeToWorkspace(
+  workspaceId: string,
+  onIncident: (kind: 'incident.saved' | 'incident.deleted', incident: Incident) => void,
+  onSettings: (settings: SettingsData) => void,
+  onMembersChanged: () => void,
+): Unsubscribe {
+  const unsubscribers: Unsubscribe[] = [];
+  const incidentQuery = query(collection(firestore, incidentsPath(workspaceId)), orderBy('updatedAt', 'desc'), limit(100));
+  recordListenerStart();
+  unsubscribers.push(onSnapshot(incidentQuery, (snapshot) => {
+    recordListenerSnapshot(snapshot.size);
+    snapshot.docChanges().forEach((change) => {
+      const incident = normalizeIncidentSnapshot(change.doc.data(), change.doc.id);
+      if (change.type === 'removed') {
+        // A limited query can evict a still-existing document when newer incidents arrive.
+        // Verify before telling the UI that the document was permanently deleted.
+        void getDoc(doc(firestore, incidentsPath(workspaceId), incident.id)).then((current) => {
+          if (!current.exists()) onIncident('incident.deleted', incident);
+        });
+        return;
+      }
+      onIncident('incident.saved', incident);
+    });
+  }));
+  recordListenerStart();
+  unsubscribers.push(onSnapshot(doc(firestore, settingsPath(workspaceId)), (snapshot) => {
+    recordListenerSnapshot(snapshot.exists() ? 1 : 0);
+    if (snapshot.exists()) onSettings({ ...defaultSettings, ...snapshot.data() } as SettingsData);
+  }));
+  recordListenerStart();
+  unsubscribers.push(onSnapshot(query(collection(firestore, membersPath(workspaceId)), limit(100)), (snapshot) => {
+    recordListenerSnapshot(snapshot.size);
+    onMembersChanged();
+  }));
+  return () => unsubscribers.forEach((unsubscribe) => { unsubscribe(); recordListenerStop(); });
+}
+
+export async function searchIncidents(workspaceId: string, term: string): Promise<Incident[]> {
+  const clean = term.trim().toLowerCase();
+  if (clean.length < 2) return [];
+  const snapshot = await getDocs(
+    query(collection(firestore, incidentsPath(workspaceId)), orderBy('updatedAt', 'desc'), limit(100)),
+  );
+  return snapshot.docs
+    .map((item) => normalizeIncidentSnapshot(item.data(), item.id))
+    .filter((incident) => {
+      const haystack = [
+        incident.incidentId,
+        incident.mduTicket,
+        incident.linkA,
+        incident.linkB,
+        incident.systemKey,
+        incident.routeSegment,
+        incident.picName,
+        incident.picArea,
+        incident.rootCause,
+        incident.b2bTitle,
+      ].join(' ').toLowerCase();
+      return haystack.includes(clean);
+    })
+    .slice(0, 40);
+}
+
+export async function removeWorkspaceSubscription(): Promise<void> {
+  // Firestore listeners are attached through onSnapshot and detached by unsubscribe callbacks.
+}
+
+export type IncidentCursor = QueryDocumentSnapshot<DocumentData>;
