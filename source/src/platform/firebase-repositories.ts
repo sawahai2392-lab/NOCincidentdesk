@@ -324,25 +324,70 @@ export async function softDeleteIncident(
   reason = '',
 ): Promise<Incident> {
   const reference = doc(firestore, incidentsPath(workspaceId), incidentId);
-  const snapshot = await getDoc(reference);
-  if (!snapshot.exists()) throw new FirebaseRepositoryError('incident_not_found', 'Incident tidak ditemukan.');
-  const current = { ...snapshot.data(), id: snapshot.id } as Incident;
-  const next = { ...current, deletedAt: now(), deletedBy: user.uid, deleteReason: reason, revision: current.revision };
-  await setDoc(reference, next);
-  return next;
+  const auditRef = doc(collection(firestore, auditPath(workspaceId, incidentId)));
+  return runTransaction(firestore, async (transaction) => {
+    const snapshot = await transaction.get(reference);
+    if (!snapshot.exists()) throw new FirebaseRepositoryError('incident_not_found', 'Incident tidak ditemukan.');
+    const current = { ...snapshot.data(), id: snapshot.id } as Incident;
+    if (current.deletedAt) throw new FirebaseRepositoryError('incident_already_in_trash', 'Incident sudah berada di Trash.');
+    const next = {
+      ...current,
+      deletedAt: now(),
+      deletedBy: user.uid,
+      deleteReason: reason,
+      updatedAt: now(),
+      updatedBy: user.uid,
+      revision: current.revision + 1,
+    };
+    transaction.set(reference, next);
+    transaction.set(auditRef, {
+      action: 'deleted',
+      summary: 'Incident dipindahkan ke Trash',
+      changedFields: ['deletedAt', 'deletedBy', 'deleteReason'],
+      fromRevision: current.revision,
+      toRevision: next.revision,
+      actorId: user.uid,
+      actorName: user.displayName || user.email || 'NOC User',
+      createdAt: now(),
+    });
+    return next;
+  });
 }
 
 export async function restoreIncident(
   workspaceId: string,
+  user: User,
   incidentId: string,
 ): Promise<Incident> {
   const reference = doc(firestore, incidentsPath(workspaceId), incidentId);
-  const snapshot = await getDoc(reference);
-  if (!snapshot.exists()) throw new FirebaseRepositoryError('trashed_incident_not_found', 'Incident tidak ditemukan.');
-  const current = { ...snapshot.data(), id: snapshot.id } as Incident;
-  const next = { ...current, deletedAt: 0, deletedBy: '', deleteReason: '', updatedAt: now(), revision: current.revision + 1 };
-  await setDoc(reference, next);
-  return next;
+  const auditRef = doc(collection(firestore, auditPath(workspaceId, incidentId)));
+  return runTransaction(firestore, async (transaction) => {
+    const snapshot = await transaction.get(reference);
+    if (!snapshot.exists()) throw new FirebaseRepositoryError('trashed_incident_not_found', 'Incident tidak ditemukan.');
+    const current = { ...snapshot.data(), id: snapshot.id } as Incident;
+    if (!current.deletedAt) throw new FirebaseRepositoryError('incident_not_in_trash', 'Incident tidak berada di Trash.');
+    const next = {
+      ...current,
+      deletedAt: 0,
+      deletedBy: '',
+      deleteReason: '',
+      updatedAt: now(),
+      updatedBy: user.uid,
+      revision: current.revision + 1,
+    };
+    transaction.set(reference, next);
+    transaction.set(auditRef, {
+      action: 'restored',
+      summary: 'Incident dipulihkan dari Trash',
+      changedFields: ['deletedAt', 'deletedBy', 'deleteReason'],
+      fromRevision: current.revision,
+      toRevision: next.revision,
+      actorId: user.uid,
+      actorName: user.displayName || user.email || 'NOC User',
+      createdAt: now(),
+    });
+    return next;
+  });
 }
 
 export async function purgeIncident(workspaceId: string, incidentId: string): Promise<void> {
@@ -584,15 +629,12 @@ export async function joinWorkspace(code: string, user: User): Promise<void> {
     }
 
     const workspaceId = String(invite.workspaceId || '');
-    const workspaceRef = doc(firestore, 'workspaces', workspaceId);
     const memberRef = doc(firestore, membersPath(workspaceId), user.uid);
     const userRef = doc(firestore, 'users', user.uid);
-    const [workspaceSnapshot, memberSnapshot, userSnapshot] = await Promise.all([
-      transaction.get(workspaceRef),
+    const [memberSnapshot, userSnapshot] = await Promise.all([
       transaction.get(memberRef),
       transaction.get(userRef),
     ]);
-    if (!workspaceSnapshot.exists()) throw new FirebaseRepositoryError('workspace_not_found', 'Workspace tidak ditemukan.');
     if (memberSnapshot.exists()) throw new FirebaseRepositoryError('account_already_has_workspace', 'Akun sudah menjadi anggota workspace ini.');
     if (userSnapshot.exists()) {
       throw new FirebaseRepositoryError('account_already_has_workspace', 'Akun sudah terhubung ke workspace lain.');
