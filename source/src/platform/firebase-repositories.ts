@@ -875,7 +875,7 @@ export async function getWorkspaceRestoreRecovery(
     ? meta.currentBatchId
     : null;
   const currentTime = now();
-  const stagingBatches = await Promise.all(stagingSnapshot.docs.map(async (snapshot) => {
+  const stagingBatches = (await Promise.all(stagingSnapshot.docs.map(async (snapshot) => {
     const data = snapshot.data();
     const chunks = await getDocs(query(
       collection(firestore, workspacePath(workspaceId) + '/routeMasterBatches/' + snapshot.id + '/chunks'),
@@ -897,7 +897,7 @@ export async function getWorkspaceRestoreRecovery(
         && lastActivityAt > 0
         && currentTime - lastActivityAt >= STALE_ROUTE_MASTER_BATCH_MS,
     };
-  })).sort((left, right) => left.lastActivityAt - right.lastActivityAt);
+  }))).sort((left, right) => left.lastActivityAt - right.lastActivityAt);
   const committedBatches = committedSnapshot.docs.map((snapshot) => ({
     ...snapshot.data(),
     id: snapshot.id,
@@ -1036,7 +1036,7 @@ export async function cleanupStaleRouteMasterBatch(
       throw new FirebaseRepositoryError('route_master_cleanup_conflict', 'Isi batch berubah ketika cleanup berlangsung. Muat ulang daftar recovery.');
     }
     const lastChunkActivityAt = latestChunks.reduce((latest, item) =>
-      Math.max(latest, Number(item.data().createdAt) || 0), 0);
+      item.exists() ? Math.max(latest, Number(item.data().createdAt) || 0) : latest, 0);
     const actualActivityAt = Math.max(
       Number(latestBatch.data().lastActivityAt) || 0,
       lastChunkActivityAt,
