@@ -618,17 +618,9 @@ test('restore operations are Admin-only and immutable outside the allowed status
     events: [{ at: startedAt, stage: 'starting', message: 'Restore started' }],
   }));
 
-  await assertSucceeds(setDoc(operationRef, {
-    status: 'completed',
-    stage: 'completed',
-    message: 'Restore verified',
-    updatedAt: startedAt + 100,
-    finishedAt: startedAt + 100,
-    events: [
-      { at: startedAt, stage: 'starting', message: 'Restore started' },
-      { at: startedAt + 100, stage: 'completed', message: 'Restore verified' },
-    ],
-  }, { merge: true }));
+  // While the operation is still running, identity and creation time are immutable.
+  await assertFails(setDoc(operationRef, { createdBy: 'operator-a' }, { merge: true }));
+  await assertFails(setDoc(operationRef, { createdAt: startedAt + 1 }, { merge: true }));
 
   const operatorOperationRef = doc(operatorDb, 'workspaces/workspace-a/restoreOperations/restore-1');
   await assertFails(getDoc(operatorOperationRef));
@@ -643,12 +635,20 @@ test('restore operations are Admin-only and immutable outside the allowed status
     events: [],
   }));
 
-  await assertFails(setDoc(operationRef, {
-    createdBy: 'operator-a',
-  }, { merge: true }));
-  await assertFails(setDoc(operationRef, {
+  await assertSucceeds(setDoc(operationRef, {
     status: 'completed',
-    createdAt: startedAt + 1,
+    stage: 'completed',
+    message: 'Restore verified',
+    updatedAt: startedAt + 100,
+    finishedAt: startedAt + 100,
+    events: [
+      { at: startedAt, stage: 'starting', message: 'Restore started' },
+      { at: startedAt + 100, stage: 'completed', message: 'Restore verified' },
+    ],
+  }, { merge: true }));
+
+  await assertFails(setDoc(operationRef, {
+    status: 'failed',
     updatedAt: startedAt + 200,
   }, { merge: true }));
   await assertFails(deleteDoc(operationRef));
