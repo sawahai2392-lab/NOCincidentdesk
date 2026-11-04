@@ -349,7 +349,7 @@ service cloud.firestore {
           .hasOnly(['status', 'revokedAt'])
         && request.resource.data.status == 'revoked'
       ) || (
-        signedIn()
+        emailVerified()
         && resource.data.status == 'pending'
         && resource.data.email == request.auth.token.email
         && request.resource.data.status == 'joined'
