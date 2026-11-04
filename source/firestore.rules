@@ -280,12 +280,23 @@ service cloud.firestore {
               'action', 'summary', 'changedFields', 'fromRevision', 'toRevision',
               'versionId', 'sourceVersionId', 'actorId', 'actorName', 'createdAt'
             ])
-            && request.resource.data.action is string
+            && request.resource.data.action in [
+              'created', 'updated', 'deleted', 'restored',
+              'snapshot_created', 'version_restored'
+            ]
             && request.resource.data.summary is string
             && request.resource.data.changedFields is list
             && request.resource.data.fromRevision is number
             && request.resource.data.toRevision is number
-            && request.resource.data.toRevision >= request.resource.data.fromRevision
+            && (
+              (request.resource.data.action == 'created'
+                && request.resource.data.fromRevision == 0
+                && request.resource.data.toRevision == 1)
+              || (request.resource.data.action == 'snapshot_created'
+                && request.resource.data.fromRevision == request.resource.data.toRevision)
+              || (request.resource.data.action in ['updated', 'deleted', 'restored', 'version_restored']
+                && request.resource.data.toRevision == request.resource.data.fromRevision + 1)
+            )
             && request.resource.data.actorId == request.auth.uid
             && request.resource.data.actorName is string
             && request.resource.data.createdAt is number
