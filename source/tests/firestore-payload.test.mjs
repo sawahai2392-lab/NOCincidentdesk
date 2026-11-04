@@ -26,7 +26,7 @@ test('keeps the application limit below Firestore 1 MiB document maximum', () =>
 });
 
 test('rejects non-JSON-serializable payloads', () => {
-  const circular: Record<string, unknown> = {};
+  const circular = {};
   circular.self = circular;
   assert.throws(() => measureFirestoreDocumentBytes(circular), TypeError);
 });
