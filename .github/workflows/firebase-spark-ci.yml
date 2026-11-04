@@ -14,6 +14,7 @@ on:
       - 'feat/phase13-*'
       - 'feat/phase14-*'
       - 'feat/phase15-*'
+      - 'feat/phase16-*'
   pull_request:
     branches:
       - feat/tt-editor-quick-updates
@@ -33,6 +34,7 @@ on:
       - 'feat/phase13-*'
       - 'feat/phase14-*'
       - 'feat/phase15-*'
+      - 'feat/phase16-*'
   workflow_dispatch:
 
 permissions:
@@ -123,4 +125,8 @@ jobs:
       - name: Workspace restore recovery policy tests
         working-directory: source
         run: npm run test:restore-recovery
+
+      - name: Workspace data integrity diagnostics tests
+        working-directory: source
+        run: npm run test:integrity
 
