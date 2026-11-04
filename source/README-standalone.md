@@ -34,7 +34,7 @@ $content = $content.Replace('replace-with-at-least-32-random-characters', $secre
 Set-Content .env $content -NoNewline
 
 # Create the local role and database in native PostgreSQL.
-.\scripts\setup-local-postgres.ps1
+powershell -NoProfile -ExecutionPolicy Bypass -File .\scripts\setup-local-postgres.ps1
 
 npm install
 npm run db:migrate
