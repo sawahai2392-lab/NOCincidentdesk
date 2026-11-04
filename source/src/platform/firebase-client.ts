@@ -171,6 +171,12 @@ async function getRequest(path: string): Promise<ApiResult> {
 
 async function postRequest(path: string, body: Record<string, unknown> = {}): Promise<ApiResult> {
   const user = firebaseAuth.currentUser;
+  const joinBeforeWorkspace = path.match(/^\/api\/invites\/([^/]+)\/join$/);
+  if (joinBeforeWorkspace) {
+    if (!user) throw new FirebaseApiError('auth_required', 'Masuk dahulu menggunakan email undangan.', 401);
+    await joinWorkspace(decodeURIComponent(joinBeforeWorkspace[1]), user);
+    return ok({ joined: true });
+  }
   const { profile } = await context();
 
   if (path === '/api/incidents') {
@@ -199,13 +205,6 @@ async function postRequest(path: string, body: Record<string, unknown> = {}): Pr
     return ok({ code, expiresInDays: 7 });
   }
 
-  const joinMatch = path.match(/^\/api\/invites\/([^/]+)\/join$/);
-  if (joinMatch) {
-    if (!user) throw new FirebaseApiError('auth_required', 'Masuk dahulu menggunakan email undangan.', 401);
-    await joinWorkspace(decodeURIComponent(joinMatch[1]), user);
-    return ok({ joined: true });
-  }
-
   const duplicateMatch = path.match(/^\/api\/incidents\/([^/]+)\/duplicate$/);
   if (duplicateMatch) {
     if (!user) throw new FirebaseApiError('auth_required', 'Silakan masuk terlebih dahulu.', 401);
@@ -215,7 +214,8 @@ async function postRequest(path: string, body: Record<string, unknown> = {}): Pr
 
   const restoreMatch = path.match(/^\/api\/incidents\/([^/]+)\/undelete$/);
   if (restoreMatch) {
-    const incident = await restoreIncident(profile.workspaceId, decodeURIComponent(restoreMatch[1]));
+    if (!user) throw new FirebaseApiError('auth_required', 'Silakan masuk terlebih dahulu.', 401);
+    const incident = await restoreIncident(profile.workspaceId, user, decodeURIComponent(restoreMatch[1]));
     return ok({ incident });
   }
 
@@ -279,6 +279,7 @@ async function postRequest(path: string, body: Record<string, unknown> = {}): Pr
   if (path.startsWith('/api/geotag/extract') || path.startsWith('/api/import/ai-extract')) {
     unavailable('Server-side AI extraction');
   }
+  if (path.includes('/attachments')) unavailable('Shared file attachment');
 
   if (path.includes('/copilot')) unavailable('Server-side AI copilot');
 
