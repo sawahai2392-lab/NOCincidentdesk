@@ -618,6 +618,12 @@ test('restore operations are Admin-only and immutable outside the allowed status
     events: [{ at: startedAt, stage: 'starting', message: 'Restore started' }],
   }));
 
+  // Audit events are append-only: an Admin cannot clear or rewrite existing events.
+  await assertFails(setDoc(operationRef, { events: [] }, { merge: true }));
+  await assertFails(setDoc(operationRef, {
+    events: [{ at: startedAt, stage: 'tampered', message: 'Changed history' }],
+  }, { merge: true }));
+
   // While the operation is still running, identity and creation time are immutable.
   await assertFails(setDoc(operationRef, { createdBy: 'operator-a' }, { merge: true }));
   await assertFails(setDoc(operationRef, { createdAt: startedAt + 1 }, { merge: true }));
