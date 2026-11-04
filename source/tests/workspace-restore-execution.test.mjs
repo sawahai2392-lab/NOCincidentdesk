@@ -42,7 +42,7 @@ function createDependencies(overrides = {}) {
   const calls = [];
   const active = { items: [], meta: { currentBatchId: 'old-batch' } };
   const dependencies = {
-    async saveSettings(value) { calls.push(['saveSettings', value.groups[0]]); },
+    async saveSettings(value, expectedUpdatedAt) { calls.push(['saveSettings', value.groups[0], expectedUpdatedAt]); return { updatedAt: 200 }; },
     async startRouteMasterImport() { calls.push(['start']); return 'staged-batch'; },
     async addRouteMasterChunk(batchId, index, items) { calls.push(['chunk', batchId, index, items.length]); },
     async verifyStagedRouteMaster(batchId, count, fingerprint) {
@@ -50,7 +50,7 @@ function createDependencies(overrides = {}) {
       return { verifiedCount: count };
     },
     async commitRouteMaster(batchId, metadata) {
-      calls.push(['commit', batchId, metadata.totalCount]);
+      calls.push(['commit', batchId, metadata.totalCount, metadata.expectedCurrentBatchId]);
       active.items = routeMaster;
       active.meta = { currentBatchId: batchId };
     },
@@ -68,7 +68,7 @@ function input(overrides = {}) {
     selection: { settings: true, routeMaster: true },
     role: 'admin',
     confirmed: true,
-    currentSettings: previousSettings,
+    currentSettings: { ...previousSettings, updatedAt: 100 },
     sourceFileName: 'backup.json',
     ...overrides,
   };
@@ -117,61 +117,77 @@ test('stages chunks, verifies them, writes settings, and commits last', async ()
   assert.ok(names.indexOf('verify') < names.indexOf('saveSettings'));
   assert.ok(names.indexOf('saveSettings') < names.indexOf('commit'));
   assert.equal(calls.find(call => call[0] === 'verify')[3], fingerprintRouteMaster(routeMaster));
+  assert.equal(calls.find(call => call[0] === 'commit')[3], 'old-batch');
 });
 
 test('does not commit when staged data verification fails', async () => {
-  const { dependencies, calls } = createDependencies({
-    async verifyStagedRouteMaster() { calls.push(['verify-failed']); throw new Error('fingerprint mismatch'); },
-  });
-  const result = await executeSelectiveWorkspaceRestore(input({ selection: { settings: false, routeMaster: true } }), dependencies);
+  const state = createDependencies();
+  state.dependencies.verifyStagedRouteMaster = async () => {
+    state.calls.push(['verify-failed']);
+    throw new Error('fingerprint mismatch');
+  };
+  const result = await executeSelectiveWorkspaceRestore(input({ selection: { settings: false, routeMaster: true } }), state.dependencies);
 
   assert.equal(result.status, 'failed');
   assert.match(result.errors.join(' '), /fingerprint mismatch/);
-  assert.equal(calls.some(call => call[0] === 'commit'), false);
-  assert.equal(calls.some(call => call[0] === 'saveSettings'), false);
+  assert.equal(state.calls.some(call => call[0] === 'commit'), false);
+  assert.equal(state.calls.some(call => call[0] === 'saveSettings'), false);
 });
 
 test('restores the previous settings when Route Master commit fails and old batch remains active', async () => {
-  const { dependencies, calls, active } = createDependencies({
-    async commitRouteMaster() { calls.push(['commit-failed']); throw new Error('commit rejected'); },
-    async readActiveRouteMaster() {
-      calls.push(['read-active']);
-      active.meta = { currentBatchId: 'old-batch' };
-      active.items = [];
-      return active;
-    },
-  });
-  const result = await executeSelectiveWorkspaceRestore(input(), dependencies);
+  const state = createDependencies();
+  state.dependencies.commitRouteMaster = async () => {
+    state.calls.push(['commit-failed']);
+    throw new Error('commit rejected');
+  };
+  state.dependencies.readActiveRouteMaster = async () => {
+    state.calls.push(['read-active']);
+    state.active.meta = { currentBatchId: 'old-batch' };
+    state.active.items = [];
+    return state.active;
+  };
+  const result = await executeSelectiveWorkspaceRestore(input(), state.dependencies);
 
   assert.equal(result.status, 'failed');
   assert.equal(result.settingsRolledBack, true);
   assert.equal(result.partial, false);
-  assert.deepEqual(calls.filter(call => call[0] === 'saveSettings').map(call => call[1]), ['NOC', 'OLD']);
+  assert.deepEqual(state.calls.filter(call => call[0] === 'saveSettings').map(call => call[1]), ['NOC', 'OLD']);
 });
 
 test('reports uncertain commit outcome without rolling back settings blindly', async () => {
-  const { dependencies, calls } = createDependencies({
-    async commitRouteMaster() { calls.push(['commit-failed']); throw new Error('network lost'); },
-    async readActiveRouteMaster() { calls.push(['read-active-failed']); throw new Error('offline'); },
-  });
-  const result = await executeSelectiveWorkspaceRestore(input(), dependencies);
+  const state = createDependencies();
+  state.dependencies.commitRouteMaster = async () => {
+    state.calls.push(['commit-failed']);
+    throw new Error('network lost');
+  };
+  state.dependencies.readActiveRouteMaster = async () => {
+    state.calls.push(['read-active-failed']);
+    throw new Error('offline');
+  };
+  const result = await executeSelectiveWorkspaceRestore(input(), state.dependencies);
 
   assert.equal(result.status, 'needs-review');
   assert.equal(result.partial, true);
-  assert.equal(calls.some(call => call[0] === 'saveSettings'), true);
-  assert.equal(calls.filter(call => call[0] === 'saveSettings').length, 1);
+  assert.equal(state.calls.some(call => call[0] === 'saveSettings'), true);
+  assert.equal(state.calls.filter(call => call[0] === 'saveSettings').length, 1);
 });
 
 test('reports partial state when compensating settings write fails', async () => {
-  const { dependencies, calls, active } = createDependencies({
-    async commitRouteMaster() { calls.push(['commit-failed']); throw new Error('commit rejected'); },
-    async readActiveRouteMaster() { calls.push(['read-active']); return active; },
-    async saveSettings(value) {
-      calls.push(['saveSettings', value.groups[0]]);
-      if (value.groups[0] === 'OLD') throw new Error('rollback denied');
-    },
-  });
-  const result = await executeSelectiveWorkspaceRestore(input(), dependencies);
+  const state = createDependencies();
+  state.dependencies.commitRouteMaster = async () => {
+    state.calls.push(['commit-failed']);
+    throw new Error('commit rejected');
+  };
+  state.dependencies.readActiveRouteMaster = async () => {
+    state.calls.push(['read-active']);
+    return state.active;
+  };
+  state.dependencies.saveSettings = async (value, expectedUpdatedAt) => {
+    state.calls.push(['saveSettings', value.groups[0], expectedUpdatedAt]);
+    if (value.groups[0] === 'OLD') throw new Error('rollback denied');
+    return { updatedAt: 200 };
+  };
+  const result = await executeSelectiveWorkspaceRestore(input(), state.dependencies);
 
   assert.equal(result.status, 'partial');
   assert.equal(result.partial, true);
