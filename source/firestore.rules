@@ -14,6 +14,20 @@ service cloud.firestore {
       return /databases/$(database)/documents/workspaces/$(workspaceId);
     }
 
+    function incidentPath(workspaceId, incidentId) {
+      return /databases/$(database)/documents/workspaces/$(workspaceId)/incidents/$(incidentId);
+    }
+
+    function incidentKeyMatchesAfter(workspaceId) {
+      let target = incidentPath(workspaceId, request.resource.data.incidentId);
+      return request.resource.data.incidentId is string
+        && request.resource.data.normalizedKey is string
+        && request.resource.data.normalizedKey.size() > 0
+        && existsAfter(target)
+        && getAfter(target).data.deletedAt == 0
+        && getAfter(target).data.normalizedIncidentId == request.resource.data.normalizedKey;
+    }
+
     function activeMember(workspaceId) {
       return signedIn()
         && exists(memberPath(workspaceId, request.auth.uid))
@@ -188,6 +202,7 @@ service cloud.firestore {
         allow get, list: if activeMember(workspaceId);
 
         allow create: if activeMember(workspaceId)
+          && request.resource.data.id == incidentId
           && request.resource.data.createdBy == request.auth.uid
           && request.resource.data.updatedBy == request.auth.uid
           && request.resource.data.revision == 1
@@ -230,7 +245,17 @@ service cloud.firestore {
 
       match /incidentKeys/{keyId} {
         allow get, list: if activeMember(workspaceId);
-        allow create, update, delete: if activeMember(workspaceId);
+        allow create, update: if activeMember(workspaceId)
+          && request.resource.data.keys().hasOnly(['incidentId', 'normalizedKey', 'active'])
+          && request.resource.data.active == true
+          && incidentKeyMatchesAfter(workspaceId);
+        allow delete: if activeMember(workspaceId)
+          && resource.data.incidentId is string
+          && (
+            !existsAfter(incidentPath(workspaceId, resource.data.incidentId))
+            || getAfter(incidentPath(workspaceId, resource.data.incidentId)).data.deletedAt > 0
+            || getAfter(incidentPath(workspaceId, resource.data.incidentId)).data.normalizedIncidentId != resource.data.normalizedKey
+          );
       }
 
       match /routeMasterMeta/{metaId} {
