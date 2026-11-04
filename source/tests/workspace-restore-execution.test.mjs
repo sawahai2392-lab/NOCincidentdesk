@@ -74,6 +74,18 @@ function input(overrides = {}) {
   };
 }
 
+test('rejects Workspace Settings that exceed the safe Firestore document budget', async () => {
+  const { dependencies, calls } = createDependencies();
+  const oversized = { ...settings, groups: ['x'.repeat(950 * 1024)] };
+  const result = await executeSelectiveWorkspaceRestore(
+    input({ bundle: { data: { settings: oversized, routeMaster: [] } }, selection: { settings: true, routeMaster: false } }),
+    dependencies,
+  );
+  assert.equal(result.status, 'failed');
+  assert.match(result.errors.join(' '), /schema/i);
+  assert.equal(calls.some(call => call[0] === 'saveSettings'), false);
+});
+
 test('does not write anything before explicit confirmation', async () => {
   const { dependencies, calls } = createDependencies();
   const result = await executeSelectiveWorkspaceRestore(input({ confirmed: false }), dependencies);
@@ -118,6 +130,8 @@ test('stages chunks, verifies them, writes settings, and commits last', async ()
   assert.ok(names.indexOf('saveSettings') < names.indexOf('commit'));
   assert.equal(calls.find(call => call[0] === 'verify')[3], fingerprintRouteMaster(routeMaster));
   assert.equal(calls.find(call => call[0] === 'commit')[3], 'old-batch');
+  assert.equal(calls.find(call => call[0] === 'commit')[4], fingerprintRouteMaster(routeMaster));
+  assert.equal(calls.filter(call => call[0] === 'saveSettings')[0][2], 100);
 });
 
 test('does not commit when staged data verification fails', async () => {
