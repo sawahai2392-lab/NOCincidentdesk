@@ -18,7 +18,6 @@
     "build": "npm run build --workspace @noc/api && vite build",
     "preview": "vite preview --host 127.0.0.1",
     "typecheck": "npm run typecheck --workspace @noc/api",
-    "db:generate": "npm run db:generate --workspace @noc/api",
     "db:migrate": "npm run db:migrate --workspace @noc/api"
   },
   "dependencies": {
