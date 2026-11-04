@@ -187,6 +187,7 @@ test('operator cannot resolve an incident or move it to Trash', async () => {
   await assertFails(setDoc(incidentRef, {
     id: 'incident-a',
     incidentId: 'TT-A-001',
+    normalizedIncidentId: 'tta001',
     status: 'Resolved',
     severity: 'Major',
     deletedAt: 0,
@@ -218,6 +219,7 @@ test('supervisor can resolve an incident', async () => {
   await assertSucceeds(setDoc(doc(db, 'workspaces/workspace-a/incidents/incident-a'), {
     id: 'incident-a',
     incidentId: 'TT-A-001',
+    normalizedIncidentId: 'tta001',
     status: 'Resolved',
     severity: 'Major',
     deletedAt: 0,
