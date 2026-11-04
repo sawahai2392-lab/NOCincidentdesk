@@ -198,14 +198,27 @@ service cloud.firestore {
             )
           );
 
-        allow update: if isAdmin(workspaceId)
+        allow update: if (
+          isAdmin(workspaceId)
           && memberUid != request.auth.uid
           && request.resource.data.userId == resource.data.userId
           && request.resource.data.workspaceId == resource.data.workspaceId
           && request.resource.data.diff(resource.data).affectedKeys()
             .hasOnly(['role', 'status', 'removedAt'])
           && request.resource.data.role in ['operator', 'supervisor']
-          && request.resource.data.status in ['active', 'removed'];
+          && request.resource.data.status in ['active', 'removed']
+        ) || (
+          signedIn()
+          && request.auth.uid == memberUid
+          && resource.data.status == 'removed'
+          && request.resource.data.status == 'active'
+          && request.resource.data.userId == resource.data.userId
+          && request.resource.data.workspaceId == resource.data.workspaceId
+          && request.resource.data.role in ['operator', 'supervisor']
+          && invitationRedeemedFor(workspaceId, memberUid)
+          && request.resource.data.diff(resource.data).affectedKeys()
+            .hasOnly(['role', 'email', 'name', 'joinedAt', 'status', 'inviteCode', 'removedAt'])
+        );
 
         allow delete: if isAdmin(workspaceId) && memberUid != request.auth.uid;
       }
