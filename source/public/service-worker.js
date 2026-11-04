@@ -9,8 +9,6 @@ self.addEventListener("push", (event) => {
   const title = payload.title || "NOC Incident Desk";
   const options = {
     body: payload.body || "Ada pembaruan pada workspace NOC.",
-    icon: "/icons/icon-192.png",
-    badge: "/icons/badge-72.png",
     tag: payload.data?.incidentId || "noc-update",
     renotify: false,
     data: {
