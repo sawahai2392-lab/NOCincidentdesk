@@ -42,7 +42,7 @@ const versionsPath = (workspaceId: string, incidentId: string) =>
   incidentsPath(workspaceId) + '/' + incidentId + '/versions';
 const normalizeKey = (value: string) =>
   value.normalize('NFKC').trim().toLowerCase().replace(/[^a-z0-9]+/g, '');
-const keyDocumentId = (value: string) => encodeURIComponent(normalizeKey(value)).replaceAll('.', '%2E');
+const keyDocumentId = (value: string) => encodeURIComponent(normalizeKey(value)).replace(/\./g, '%2E');
 
 export class FirebaseRepositoryError extends Error {
   code: string;
