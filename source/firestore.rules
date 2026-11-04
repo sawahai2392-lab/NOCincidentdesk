@@ -6,6 +6,10 @@ service cloud.firestore {
       return request.auth != null;
     }
 
+    function emailVerified() {
+      return signedIn() && request.auth.token.email_verified == true;
+    }
+
     function memberPath(workspaceId, uid) {
       return /databases/$(database)/documents/workspaces/$(workspaceId)/members/$(uid);
     }
@@ -50,7 +54,7 @@ service cloud.firestore {
     }
 
     function activeMember(workspaceId) {
-      return signedIn()
+      return emailVerified()
         && exists(memberPath(workspaceId, request.auth.uid))
         && get(memberPath(workspaceId, request.auth.uid)).data.status == 'active';
     }
@@ -73,7 +77,7 @@ service cloud.firestore {
     }
 
     function invitationRedeemedFor(workspaceId, memberUid) {
-      return signedIn()
+      return emailVerified()
         && request.resource.data.inviteCode is string
         && existsAfter(invitationPath(request.resource.data.inviteCode))
         && getAfter(invitationPath(request.resource.data.inviteCode)).data.status == 'joined'
@@ -140,10 +144,10 @@ service cloud.firestore {
     }
 
     match /users/{uid} {
-      allow get: if signedIn() && request.auth.uid == uid;
+      allow get: if emailVerified() && request.auth.uid == uid;
       allow list: if false;
 
-      allow create: if signedIn()
+      allow create: if emailVerified()
         && request.auth.uid == uid
         && request.resource.data.uid == uid
         && request.resource.data.workspaceId is string
@@ -151,7 +155,7 @@ service cloud.firestore {
         && getAfter(memberPath(request.resource.data.workspaceId, uid)).data.status == 'active'
         && request.resource.data.role == getAfter(memberPath(request.resource.data.workspaceId, uid)).data.role;
 
-      allow update: if signedIn()
+      allow update: if emailVerified()
         && request.auth.uid == uid
         && request.resource.data.workspaceId == resource.data.workspaceId
         && request.resource.data.uid == resource.data.uid
@@ -165,7 +169,7 @@ service cloud.firestore {
       allow get: if activeMember(workspaceId);
       allow list: if false;
 
-      allow create: if signedIn()
+      allow create: if emailVerified()
         && request.resource.data.ownerUid == request.auth.uid
         && existsAfter(memberPath(workspaceId, request.auth.uid))
         && getAfter(memberPath(workspaceId, request.auth.uid)).data.role == 'admin';
@@ -178,10 +182,10 @@ service cloud.firestore {
       allow delete: if false;
 
       match /members/{memberUid} {
-        allow get: if (signedIn() && memberUid == request.auth.uid) || activeMember(workspaceId);
+        allow get: if (emailVerified() && memberUid == request.auth.uid) || activeMember(workspaceId);
         allow list: if activeMember(workspaceId);
 
-        allow create: if signedIn()
+        allow create: if emailVerified()
           && memberUid == request.auth.uid
           && request.resource.data.userId == memberUid
           && request.resource.data.workspaceId == workspaceId
@@ -208,7 +212,7 @@ service cloud.firestore {
           && request.resource.data.role in ['operator', 'supervisor']
           && request.resource.data.status in ['active', 'removed']
         ) || (
-          signedIn()
+          emailVerified()
           && request.auth.uid == memberUid
           && resource.data.status == 'removed'
           && request.resource.data.status == 'active'
@@ -225,7 +229,7 @@ service cloud.firestore {
 
       match /settings/{settingId} {
         allow get, list: if activeMember(workspaceId);
-        allow create: if signedIn()
+        allow create: if emailVerified()
           && getAfter(workspacePath(workspaceId)).data.ownerUid == request.auth.uid
           && getAfter(memberPath(workspaceId, request.auth.uid)).data.role == 'admin';
         allow update: if isAdmin(workspaceId);
@@ -324,7 +328,7 @@ service cloud.firestore {
     }
 
     match /workspaceInvites/{inviteCode} {
-      allow get: if signedIn()
+      allow get: if emailVerified()
         && (
           isAdmin(resource.data.workspaceId)
           || resource.data.email == request.auth.token.email
