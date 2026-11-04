@@ -24,6 +24,7 @@ import { firestore } from './firebase';
 import { recordBatchWrite, recordDirectWrite, recordDocumentRead, recordListenerSnapshot, recordListenerStart, recordListenerStop, recordQueryRead, recordTransaction } from '../firestore-usage';
 import { decodeIncidentPageCursor, encodeIncidentPageCursor } from '../incident-pagination';
 import { createWorkspaceBackupBundle, type WorkspaceBackupBundle } from '../workspace-backup';
+import { validateRouteMasterChunkSet } from '../route-master-integrity';
 import { isFirestoreIncidentPayloadSafe, measureFirestoreDocumentBytes, MAX_FIRESTORE_INCIDENT_DOCUMENT_BYTES } from '../firestore-payload';
 import {
   defaultSettings,
@@ -905,12 +906,20 @@ export async function addRouteMasterChunk(
   );
 }
 
-export async function commitRouteMasterImport(
+export async function verifyRouteMasterImport(
   workspaceId: string,
-  user: User,
   batchId: string,
-  metadata: Record<string, unknown>,
-): Promise<void> {
+  expectedCount: number,
+  expectedFingerprint: string,
+): Promise<{ verifiedCount: number; chunkCount: number }> {
+  if (!batchId.trim() || !expectedFingerprint.trim()) {
+    throw new FirebaseRepositoryError('route_master_verify_input_invalid', 'Data verifikasi Route Master tidak lengkap.');
+  }
+  const batchRef = doc(firestore, workspacePath(workspaceId) + '/routeMasterBatches', batchId);
+  const batchSnapshot = await getDoc(batchRef);
+  if (!batchSnapshot.exists() || batchSnapshot.data().status !== 'staging') {
+    throw new FirebaseRepositoryError('route_master_staging_not_found', 'Batch staging Route Master tidak ditemukan atau sudah tidak berstatus staging.');
+  }
   const chunks = await getDocs(
     query(
       collection(firestore, workspacePath(workspaceId) + '/routeMasterBatches/' + batchId + '/chunks'),
@@ -918,17 +927,68 @@ export async function commitRouteMasterImport(
       limit(60),
     ),
   );
-  const count = chunks.docs.reduce((total, item) => total + (Array.isArray(item.data().items) ? item.data().items.length : 0), 0);
-  if (!count || count > 20000) throw new FirebaseRepositoryError('route_master_invalid_count', 'Jumlah mapping route master tidak valid.');
+  const validation = validateRouteMasterChunkSet(
+    chunks.docs.map((item) => ({
+      chunkIndex: Number(item.data().chunkIndex),
+      items: item.data().items,
+    })),
+    expectedCount,
+    expectedFingerprint,
+  );
+  if (!validation.valid) {
+    throw new FirebaseRepositoryError('route_master_staging_invalid', validation.errors.join(' '));
+  }
+  return { verifiedCount: validation.count, chunkCount: validation.chunkCount };
+}
+
+export async function commitRouteMasterImport(
+  workspaceId: string,
+  user: User,
+  batchId: string,
+  metadata: Record<string, unknown>,
+): Promise<void> {
+  const expectedCount = typeof metadata.totalCount === 'number' ? metadata.totalCount : 0;
+  if (!batchId.trim() || !Number.isInteger(expectedCount)
+    || expectedCount < 1 || expectedCount > 20000) {
+    throw new FirebaseRepositoryError('route_master_invalid_count', 'Jumlah mapping route master tidak valid.');
+  }
+
+  const batchRef = doc(firestore, workspacePath(workspaceId) + '/routeMasterBatches', batchId);
+  const batchSnapshot = await getDoc(batchRef);
+  if (!batchSnapshot.exists() || batchSnapshot.data().status !== 'staging') {
+    throw new FirebaseRepositoryError('route_master_staging_not_found', 'Batch staging Route Master tidak ditemukan atau sudah tidak berstatus staging.');
+  }
+
+  const chunks = await getDocs(
+    query(
+      collection(firestore, workspacePath(workspaceId) + '/routeMasterBatches/' + batchId + '/chunks'),
+      orderBy('chunkIndex', 'asc'),
+      limit(60),
+    ),
+  );
+  const validation = validateRouteMasterChunkSet(
+    chunks.docs.map((item) => ({
+      chunkIndex: Number(item.data().chunkIndex),
+      items: item.data().items,
+    })),
+    expectedCount,
+  );
+  if (!validation.valid) {
+    throw new FirebaseRepositoryError('route_master_staging_invalid', validation.errors.join(' '));
+  }
+
+  const { totalCount: _totalCount, ...publicMetadata } = metadata;
   const batch = writeBatch(firestore);
-  batch.update(doc(firestore, workspacePath(workspaceId) + '/routeMasterBatches', batchId), {
+  batch.update(batchRef, {
     status: 'committed',
     committedAt: now(),
-    count,
+    count: validation.count,
   });
+  // Pointer activation and batch status are atomic. The previous committed batch
+  // is deliberately retained so an Admin can recover by switching the pointer.
   batch.set(doc(firestore, workspacePath(workspaceId) + '/routeMasterMeta/main'), {
-    ...metadata,
-    count,
+    ...publicMetadata,
+    count: validation.count,
     currentBatchId: batchId,
     updatedAt: now(),
     updatedBy: user.uid,
