@@ -573,29 +573,23 @@ export async function purgeIncident(workspaceId: string, incidentId: string): Pr
   const reference = doc(firestore, incidentsPath(workspaceId), incidentId);
   const snapshot = await getDoc(reference);
   if (!snapshot.exists()) return;
+
   const incident = normalizeIncidentSnapshot(snapshot.data(), incidentId);
   if (!incident.deletedAt) {
-    throw new FirebaseRepositoryError('incident_must_be_trashed', 'Pindahkan incident ke Trash sebelum menghapus permanen.');
-  }
-  if (Array.isArray(incident.attachments) && incident.attachments.length) {
     throw new FirebaseRepositoryError(
-      'attachment_cleanup_required',
-      'Incident memiliki metadata lampiran. Hapus atau ekspor lampiran terlebih dahulu.',
+      'incident_must_be_trashed',
+      'Pindahkan incident ke Trash sebelum menghapus permanen.',
     );
   }
-  const keySnapshot = incident.incidentId.trim()
-    ? await getDoc(incidentKeyRef(workspaceId, incident.incidentId))
-    : null;
-  const [audit, versions] = await Promise.all([
-    getDocs(collection(firestore, auditPath(workspaceId, incidentId))),
-    getDocs(collection(firestore, versionsPath(workspaceId, incidentId))),
-  ]);
-  const batch = writeBatch(firestore);
-  audit.docs.forEach((item) => batch.delete(item.ref));
-  versions.docs.forEach((item) => batch.delete(item.ref));
-  batch.delete(reference);
-  if (keySnapshot?.exists()) batch.delete(keySnapshot.ref);
-  await batch.commit();
+
+  // Firestore Security Rules cannot verify that every document in arbitrary
+  // subcollections has been deleted. A client-side cascade could therefore
+  // leave orphaned audit/version records after a partial failure. Keep the
+  // record in Trash until a trusted purge workflow is available.
+  throw new FirebaseRepositoryError(
+    'permanent_purge_unavailable',
+    'Penghapusan permanen dinonaktifkan pada mode Firebase Spark-only. Incident tetap tersimpan di Trash agar audit dan version history tidak terhapus sebagian.',
+  );
 }
 
 export async function duplicateIncident(

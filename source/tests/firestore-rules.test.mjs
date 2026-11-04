@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import { readFile } from 'node:fs/promises';
 import { after, before, beforeEach, test } from 'node:test';
-import { doc, getDoc, setDoc, writeBatch, Timestamp } from 'firebase/firestore';
+import { deleteDoc, doc, getDoc, setDoc, writeBatch, Timestamp } from 'firebase/firestore';
 import {
   assertFails,
   assertSucceeds,
@@ -410,4 +410,35 @@ test('first account can create its own Admin workspace atomically', async () => 
     updatedBy: 'first-admin',
   });
   await assertSucceeds(batch.commit());
+});
+
+test('hard delete is disabled for both Admin and Operator in Spark-only mode', async () => {
+  await testEnv.withSecurityRulesDisabled(async (context) => {
+    const db = context.firestore();
+    await setDoc(doc(db, 'workspaces/workspace-a/incidents/incident-a'), {
+      id: 'incident-a',
+      incidentId: 'TT-A-001',
+      normalizedIncidentId: 'tta001',
+      status: 'Open',
+      severity: 'Major',
+      deletedAt: 10,
+      createdBy: 'operator-a',
+      createdAt: 1,
+      updatedBy: 'admin-a',
+      updatedAt: 10,
+      revision: 2,
+    });
+  });
+
+  const operatorDb = testEnv.authenticatedContext('operator-a', {
+    email: 'operator@example.com',
+    email_verified: true,
+  }).firestore();
+  const adminDb = testEnv.authenticatedContext('admin-a', {
+    email: 'admin@example.com',
+    email_verified: true,
+  }).firestore();
+
+  await assertFails(deleteDoc(doc(operatorDb, 'workspaces/workspace-a/incidents/incident-a')));
+  await assertFails(deleteDoc(doc(adminDb, 'workspaces/workspace-a/incidents/incident-a')));
 });

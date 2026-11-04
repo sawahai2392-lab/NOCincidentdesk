@@ -261,7 +261,9 @@ service cloud.firestore {
           && reopenReasonPresent()
           && incidentHasKeyAfter(workspaceId, incidentId);
 
-        allow delete: if isAdmin(workspaceId) && resource.data.deletedAt > 0;
+        // Client-only Spark mode cannot safely cascade and verify child history.
+        // Keep hard deletion disabled until a trusted purge workflow exists.
+        allow delete: if false;
 
         match /audit/{auditId} {
           allow get, list: if activeMember(workspaceId);
