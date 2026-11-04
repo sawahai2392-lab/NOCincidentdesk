@@ -230,6 +230,7 @@ test('first account can create its own Admin workspace atomically', async () => 
   batch.set(doc(db, 'users/first-admin'), {
     uid: 'first-admin',
     workspaceId: 'new-workspace',
+    role: 'admin',
     email: 'first@example.com',
     name: 'First Admin',
     createdAt: 1,
