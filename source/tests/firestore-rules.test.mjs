@@ -446,6 +446,36 @@ test('version snapshots and their audit entries must be created atomically', asy
     actorName: 'Operator A',
     createdAt: 4,
   }));
+  await assertFails(setDoc(doc(db, 'workspaces/workspace-a/incidents/incident-a/audit/audit-missing-version-id'), {
+    action: 'snapshot_created',
+    summary: 'Snapshot without reference',
+    changedFields: [],
+    fromRevision: 1,
+    toRevision: 1,
+    actorId: 'operator-a',
+    actorName: 'Operator A',
+    createdAt: 5,
+  }));
+
+  const restoreBatch = writeBatch(db);
+  restoreBatch.update(doc(db, 'workspaces/workspace-a/incidents/incident-a'), {
+    updatedBy: 'operator-a',
+    updatedAt: 6,
+    revision: 2,
+  });
+  restoreBatch.set(doc(db, 'workspaces/workspace-a/incidents/incident-a/audit/audit-restore'), {
+    action: 'version_restored',
+    summary: 'Incident dipulihkan dari version snapshot',
+    changedFields: ['internalNotes'],
+    fromRevision: 1,
+    toRevision: 2,
+    sourceVersionId: 'version-1',
+    actorId: 'operator-a',
+    actorName: 'Operator A',
+    createdAt: 6,
+  });
+  await assertSucceeds(restoreBatch.commit());
+
   await assertFails(setDoc(version, {
     id: 'version-1',
     label: 'Tampered',
