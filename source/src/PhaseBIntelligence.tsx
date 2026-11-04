@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useState } from 'react';
-import { api } from '@appdeploy/client';
+import { api } from './platform/client';
 import { AlertTriangle, ChevronRight, GitBranch, Link2, LoaderCircle, MapPin, Radar, RefreshCw, Unlink } from 'lucide-react';
 import type { Incident } from './domain';
 

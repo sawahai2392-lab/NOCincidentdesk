@@ -1,0 +1,99 @@
+name: Standalone CI
+
+on:
+  push:
+    branches:
+      - feat/standalone-platform-migration
+  pull_request:
+    branches:
+      - main
+      - feat/tt-editor-quick-updates
+      - feat/standalone-platform-migration
+
+permissions:
+  contents: read
+
+concurrency:
+  group: standalone-ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:18.6
+        env:
+          POSTGRES_DB: nocdesk
+          POSTGRES_USER: nocdesk
+          POSTGRES_PASSWORD: nocdesk_ci_only
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U nocdesk -d nocdesk"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 12
+    env:
+      API_HOST: 127.0.0.1
+      API_PORT: 4000
+      WEB_ORIGIN: http://127.0.0.1:4000
+      APP_URL: http://127.0.0.1:4000
+      BETTER_AUTH_URL: http://127.0.0.1:4000
+      BETTER_AUTH_SECRET: ci-only-secret-not-for-production-use-123456789
+      DATABASE_URL: postgresql://nocdesk:nocdesk_ci_only@127.0.0.1:5432/nocdesk
+      STORAGE_DRIVER: local
+      STORAGE_LOCAL_DIR: .data/uploads
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Node.js 26
+        uses: actions/setup-node@v4
+        with:
+          node-version: 26
+
+      - name: Install dependencies
+        working-directory: source
+        run: npm install --no-audit --no-fund
+
+      - name: Typecheck API workspace
+        working-directory: source
+        run: npm run typecheck
+
+      - name: Apply PostgreSQL migrations
+        working-directory: source
+        run: npm run db:migrate
+
+      - name: Production build
+        working-directory: source
+        run: npm run build
+
+      - name: Smoke test standalone production server
+        working-directory: source
+        shell: bash
+        env:
+          NODE_ENV: production
+        run: |
+          node server/dist/index.js > /tmp/noc-server.log 2>&1 &
+          SERVER_PID=$!
+          cleanup() {
+            kill "$SERVER_PID" 2>/dev/null || true
+          }
+          trap cleanup EXIT
+
+          for attempt in $(seq 1 30); do
+            if curl --fail --silent http://127.0.0.1:4000/api/health/ready > /tmp/noc-health.json; then
+              break
+            fi
+            if ! kill -0 "$SERVER_PID" 2>/dev/null; then
+              cat /tmp/noc-server.log
+              exit 1
+            fi
+            sleep 2
+          done
+
+          cat /tmp/noc-health.json
+          grep -q '"status":"ready"' /tmp/noc-health.json
+          curl --fail --silent http://127.0.0.1:4000/ | grep -q 'NOC Incident Desk'
+          curl --fail --silent http://127.0.0.1:4000/api/auth/get-session | grep -q 'null'

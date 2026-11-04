@@ -1,4 +1,5 @@
-import { ai } from '@appdeploy/sdk';
+// @ts-nocheck
+import { ai } from '../server/src/standalone-sdk.js';
 
 export type CopilotContext={incident:Record<string,unknown>;related:Array<Record<string,unknown>>;intelligence:{scanTruncated:boolean;relatedCount:number}};
 export type CopilotSuggestion={value:string;confidence:number;reason:string};

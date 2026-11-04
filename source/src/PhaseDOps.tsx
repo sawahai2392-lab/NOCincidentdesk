@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useState } from 'react';
-import { api } from '@appdeploy/client';
+import { api } from './platform/client';
 import { AlertTriangle, BellRing, Check, CheckCircle2, ChevronRight, Clock3, LoaderCircle, Radio, RefreshCw, ShieldAlert, UserRoundX, X } from 'lucide-react';
 import { incidentSlaState, type Incident, type SettingsData } from './domain';
 

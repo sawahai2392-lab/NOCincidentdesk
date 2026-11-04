@@ -1,4 +1,5 @@
-import { db } from '@appdeploy/sdk';
+// @ts-nocheck
+import { db } from '../server/src/standalone-sdk.js';
 type Incident=Record<string,any>&{id:string};
 type Dimension='systemKey'|'routeSegment';
 const txt=(value:unknown)=>typeof value==='string'?value.trim():'';

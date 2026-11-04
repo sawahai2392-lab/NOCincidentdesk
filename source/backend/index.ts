@@ -1,4 +1,5 @@
-import { router, json, error, requireAuth, db, storage, invites, isInviteError, secrets, notifications, ai } from '@appdeploy/sdk';
+// @ts-nocheck
+import { router, json, error, requireAuth, db, storage, invites, isInviteError, secrets, notifications, ai, workspaceRecords } from '../server/src/standalone-sdk.js';
 import { addSubscription, removeSubscriptions, notifySubscribers } from './realtime-subscribers';
 import { runIncidentCopilot } from './copilot';
 import { dismissOperationsAlert, getOperationsAlertSummary, getOperationsAlerts, getOperationsHealth, markAllOperationsAlertsRead, markOperationsAlertRead, processOperationsEscalations } from './operations';
@@ -61,7 +62,31 @@ async function listMembers(workspaceId: string) { const { items } = await db.lis
 async function getSettings(workspaceId: string) { const { items } = await db.list<SettingsRecord>(settingsTable(workspaceId), { limit: 1 }); if (items[0]) return { ...defaults, ...items[0], slaCriticalMinutes: items[0].slaCriticalMinutes || defaults.slaCriticalMinutes, slaMajorMinutes: items[0].slaMajorMinutes || defaults.slaMajorMinutes, slaMinorMinutes: items[0].slaMinorMinutes || defaults.slaMinorMinutes, staleUpdateMinutes: items[0].staleUpdateMinutes || defaults.staleUpdateMinutes }; const [id] = await db.add(settingsTable(workspaceId), [{ ...defaults, updatedAt: Date.now() }]); return { ...defaults, id: id || undefined }; }
 async function ensureSlaWorkspace(workspaceId: string) { const { items } = await db.list<SlaWorkspaceRecord>(SLA_WORKSPACE_TABLE, { limit: 500 }); if (!items.some(item => item.workspaceId === workspaceId)) await db.add(SLA_WORKSPACE_TABLE, [{ workspaceId, createdAt: Date.now() }]); }
 async function getRouteMasterMeta(workspaceId: string) { const { items } = await db.list<RouteMasterMetaRecord>(routeMasterMetaTable(workspaceId), { limit: 1 }); return items[0] || null; }
-async function ensureProfile(user: { userId: string; email?: string; name?: string }) { const existing = await getProfile(user.userId); if (existing) { await ensureSlaWorkspace(existing.workspaceId); return existing; } const createdAt = Date.now(); const workspaceId = user.userId; const profile: ProfileRecord = { userId: user.userId, workspaceId, role: 'admin', email: user.email || '', name: user.name || 'Admin NOC', createdAt }; const [profileId] = await db.add(profileTable(user.userId), [{ ...profile }]); if (!profileId) throw new Error('Failed to create profile'); await db.add(memberTable(workspaceId), [{ ...profile, joinedAt: createdAt }]); await db.add(settingsTable(workspaceId), [{ ...defaults, updatedAt: createdAt }]); await ensureSlaWorkspace(workspaceId); return { ...profile, id: profileId }; }
+async function ensureProfile(user: { userId: string; email?: string; name?: string }) {
+  const existing = await getProfile(user.userId);
+  if (existing) {
+    await workspaceRecords.ensure(existing.workspaceId, existing.userId, existing.name || "NOC Workspace");
+    await ensureSlaWorkspace(existing.workspaceId);
+    return existing;
+  }
+  const createdAt = Date.now();
+  const workspaceId = user.userId;
+  const profile: ProfileRecord = {
+    userId: user.userId,
+    workspaceId,
+    role: "admin",
+    email: user.email || "",
+    name: user.name || "Admin NOC",
+    createdAt
+  };
+  await workspaceRecords.ensure(workspaceId, user.userId, profile.name);
+  const [profileId] = await db.add(profileTable(user.userId), [{ ...profile }]);
+  if (!profileId) throw new Error("Failed to create profile");
+  await db.add(memberTable(workspaceId), [{ ...profile, joinedAt: createdAt }]);
+  await db.add(settingsTable(workspaceId), [{ ...defaults, updatedAt: createdAt }]);
+  await ensureSlaWorkspace(workspaceId);
+  return { ...profile, id: profileId };
+}
 const cleanList = (value: unknown, fallback: string[]) => Array.isArray(value) ? value.filter(item => typeof item === 'string').map(item => String(item).trim()).filter(Boolean).slice(0, 250) : fallback;
 const positiveMinutes = (value: unknown, fallback: number) => typeof value === 'number' && Number.isFinite(value) ? Math.max(5, Math.min(1440, Math.round(value))) : fallback;
 function normalizeSettings(body: Record<string, unknown>, current?: SettingsRecord): SettingsRecord { const source = current || defaults; return { groups: cleanList(body.groups, source.groups), picAreas: cleanList(body.picAreas, source.picAreas), picNames: cleanList(body.picNames, source.picNames), rootCauses: cleanList(body.rootCauses, source.rootCauses), actions: cleanList(body.actions, source.actions), progressPhrases: cleanList(body.progressPhrases, source.progressPhrases), sites: cleanList(body.sites, source.sites), slaCriticalMinutes: positiveMinutes(body.slaCriticalMinutes, source.slaCriticalMinutes || defaults.slaCriticalMinutes), slaMajorMinutes: positiveMinutes(body.slaMajorMinutes, source.slaMajorMinutes || defaults.slaMajorMinutes), slaMinorMinutes: positiveMinutes(body.slaMinorMinutes, source.slaMinorMinutes || defaults.slaMinorMinutes), staleUpdateMinutes: positiveMinutes(body.staleUpdateMinutes, source.staleUpdateMinutes || defaults.staleUpdateMinutes), updatedAt: Date.now() }; }

@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useState } from 'react';
-import { api } from '@appdeploy/client';
+import { api } from './platform/client';
 import { ClipboardCopy, Clock3, Radio, Search, ShieldAlert, X } from 'lucide-react';
 import type { Incident } from './domain';
 import type { RunningItem } from './RunningWorkspace';

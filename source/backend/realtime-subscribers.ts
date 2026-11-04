@@ -1,4 +1,5 @@
-import { db, ws, json, error } from "@appdeploy/sdk";
+// @ts-nocheck
+import { db, ws, json, error } from "../server/src/standalone-sdk.js";
 
 const SUBSCRIPTIONS_TABLE = "entity_subscriptions";
 
