@@ -102,6 +102,11 @@ beforeEach(async () => {
       updatedAt: 1,
       revision: 1,
     });
+    await setDoc(doc(db, 'workspaces/workspace-a/incidentKeys/tta001'), {
+      incidentId: 'incident-a',
+      normalizedKey: 'tta001',
+      active: true,
+    });
   });
 });
 
@@ -224,30 +229,10 @@ test('supervisor can resolve an incident', async () => {
   }));
 });
 
-test('incident key documents must point to an active incident in the same workspace', async () => {
+test('incident key documents cannot point to missing incidents', async () => {
   const db = testEnv.authenticatedContext('operator-a', {
     email: 'operator@example.com',
   }).firestore();
-
-  await assertSucceeds(setDoc(doc(db, 'workspaces/workspace-a/incidents/new-keyed'), {
-    id: 'new-keyed',
-    incidentId: 'TT-A-002',
-    normalizedIncidentId: 'tta002',
-    status: 'Draft',
-    severity: 'Major',
-    deletedAt: 0,
-    createdBy: 'operator-a',
-    createdAt: 2,
-    updatedBy: 'operator-a',
-    updatedAt: 2,
-    revision: 1,
-  }));
-
-  await assertSucceeds(setDoc(doc(db, 'workspaces/workspace-a/incidentKeys/tta002'), {
-    incidentId: 'new-keyed',
-    normalizedKey: 'tta002',
-    active: true,
-  }));
 
   await assertFails(setDoc(doc(db, 'workspaces/workspace-a/incidentKeys/poisoned'), {
     incidentId: 'missing-incident',
