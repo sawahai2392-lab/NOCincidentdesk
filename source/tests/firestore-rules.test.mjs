@@ -591,3 +591,65 @@ test('hard delete is disabled for both Admin and Operator in Spark-only mode', a
   await assertFails(deleteDoc(doc(adminDb, 'workspaces/workspace-a/incidents/incident-a/audit/audit-1')));
   await assertFails(deleteDoc(doc(adminDb, 'workspaces/workspace-a/incidents/incident-a/versions/version-1')));
 });
+
+
+test('restore operations are Admin-only and immutable outside the allowed status fields', async () => {
+  const adminDb = testEnv.authenticatedContext('admin-a', {
+    email: 'admin@example.com',
+    email_verified: true,
+  }).firestore();
+  const operatorDb = testEnv.authenticatedContext('operator-a', {
+    email: 'operator@example.com',
+    email_verified: true,
+  }).firestore();
+  const operationRef = doc(adminDb, 'workspaces/workspace-a/restoreOperations/restore-1');
+  const startedAt = Date.now();
+
+  await assertSucceeds(setDoc(operationRef, {
+    id: 'restore-1',
+    kind: 'selective-restore',
+    status: 'running',
+    stage: 'starting',
+    message: 'Restore started',
+    selectedSections: ['settings', 'routeMaster'],
+    createdAt: startedAt,
+    updatedAt: startedAt,
+    createdBy: 'admin-a',
+    events: [{ at: startedAt, stage: 'starting', message: 'Restore started' }],
+  }));
+
+  await assertSucceeds(setDoc(operationRef, {
+    status: 'completed',
+    stage: 'completed',
+    message: 'Restore verified',
+    updatedAt: startedAt + 100,
+    finishedAt: startedAt + 100,
+    events: [
+      { at: startedAt, stage: 'starting', message: 'Restore started' },
+      { at: startedAt + 100, stage: 'completed', message: 'Restore verified' },
+    ],
+  }, { merge: true }));
+
+  const operatorOperationRef = doc(operatorDb, 'workspaces/workspace-a/restoreOperations/restore-1');
+  await assertFails(getDoc(operatorOperationRef));
+  await assertFails(setDoc(doc(operatorDb, 'workspaces/workspace-a/restoreOperations/operator-restore'), {
+    id: 'operator-restore',
+    kind: 'selective-restore',
+    status: 'running',
+    createdAt: startedAt,
+    updatedAt: startedAt,
+    createdBy: 'operator-a',
+    selectedSections: ['settings'],
+    events: [],
+  }));
+
+  await assertFails(setDoc(operationRef, {
+    createdBy: 'operator-a',
+  }, { merge: true }));
+  await assertFails(setDoc(operationRef, {
+    status: 'completed',
+    createdAt: startedAt + 1,
+    updatedAt: startedAt + 200,
+  }, { merge: true }));
+  await assertFails(deleteDoc(operationRef));
+});
