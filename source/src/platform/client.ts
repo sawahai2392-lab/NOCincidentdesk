@@ -235,8 +235,13 @@ export const notifications = {
     }
 
     const registration = await navigator.serviceWorker.register("/service-worker.js");
+    const base64PublicKey = data.publicKey.replace(/-/g, "+").replace(/_/g, "/");
+    const paddedPublicKey = base64PublicKey.padEnd(
+      Math.ceil(base64PublicKey.length / 4) * 4,
+      "="
+    );
     const applicationServerKey = Uint8Array.from(
-      atob(data.publicKey.replace(/-/g, "+").replace(/_/g, "/")),
+      atob(paddedPublicKey),
       (character) => character.charCodeAt(0)
     );
     const subscription = await registration.pushManager.subscribe({
