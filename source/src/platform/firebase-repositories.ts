@@ -109,35 +109,46 @@ export async function ensureWorkspace(user: User): Promise<WorkspaceContext> {
     email: user.email || '',
     name: user.displayName || user.email?.split('@')[0] || 'Admin NOC',
   };
-  const batch = writeBatch(firestore);
-  batch.set(workspaceRef, {
-    name: 'NOC Workspace',
-    ownerUid: user.uid,
-    createdAt,
-    updatedAt: createdAt,
-    status: 'active',
+  const memberRef = doc(firestore, membersPath(workspaceId), user.uid);
+  const settingsRef = doc(firestore, settingsPath(workspaceId));
+
+  // Re-check the user document inside the transaction so two first-login tabs
+  // cannot create orphan workspaces for the same Auth account.
+  const created = await runTransaction(firestore, async (transaction) => {
+    const latestUser = await transaction.get(userRef);
+    if (latestUser.exists()) return false;
+
+    transaction.set(workspaceRef, {
+      name: 'NOC Workspace',
+      ownerUid: user.uid,
+      createdAt,
+      updatedAt: createdAt,
+      status: 'active',
+    });
+    transaction.set(memberRef, {
+      ...profile,
+      joinedAt: createdAt,
+      status: 'active',
+    });
+    transaction.set(userRef, {
+      uid: user.uid,
+      workspaceId,
+      role: 'admin',
+      email: user.email || '',
+      name: profile.name,
+      photoURL: user.photoURL || '',
+      createdAt,
+      updatedAt: createdAt,
+    });
+    transaction.set(settingsRef, {
+      ...defaultSettings,
+      updatedAt: createdAt,
+      updatedBy: user.uid,
+    });
+    return true;
   });
-  batch.set(doc(firestore, membersPath(workspaceId), user.uid), {
-    ...profile,
-    joinedAt: createdAt,
-    status: 'active',
-  });
-  batch.set(userRef, {
-    uid: user.uid,
-    workspaceId,
-    role: 'admin',
-    email: user.email || '',
-    name: profile.name,
-    photoURL: user.photoURL || '',
-    createdAt,
-    updatedAt: createdAt,
-  });
-  batch.set(doc(firestore, settingsPath(workspaceId)), {
-    ...defaultSettings,
-    updatedAt: createdAt,
-    updatedBy: user.uid,
-  });
-  await batch.commit();
+
+  if (!created) return ensureWorkspace(user);
   return { profile, user };
 }
 
