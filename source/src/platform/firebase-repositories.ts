@@ -404,7 +404,7 @@ export async function saveIncident(
   workspaceId: string,
   user: User,
   value: Incident,
-  auditContext: { action?: string; summary?: string; versionId?: string } = {},
+  auditContext: { action?: string; summary?: string; sourceVersionId?: string } = {},
 ): Promise<Incident> {
   const incidentRef = doc(firestore, incidentsPath(workspaceId), value.id);
   const auditRef = doc(collection(firestore, auditPath(workspaceId, value.id)));
@@ -468,7 +468,7 @@ export async function saveIncident(
       changedFields: fields,
       fromRevision: current.revision,
       toRevision: next.revision,
-      ...(auditContext.versionId ? { versionId: auditContext.versionId } : {}),
+      ...(auditContext.sourceVersionId ? { sourceVersionId: auditContext.sourceVersionId } : {}),
       actorId: user.uid,
       actorName: user.displayName || user.email || 'NOC User',
       createdAt: now(),
@@ -639,6 +639,7 @@ export async function createVersion(
   user: User,
   incidentId: string,
   label: string,
+  expectedRevision: number,
 ): Promise<IncidentVersion> {
   const incidentRef = doc(firestore, incidentsPath(workspaceId), incidentId);
   const versionRef = doc(collection(firestore, versionsPath(workspaceId, incidentId)));
@@ -657,6 +658,9 @@ export async function createVersion(
     const incident = normalizeIncidentSnapshot(incidentSnapshot.data(), incidentSnapshot.id);
     if (incident.deletedAt) {
       throw new FirebaseRepositoryError('incident_in_trash', 'Incident di Trash tidak dapat dibuatkan snapshot.');
+    }
+    if (incident.revision !== expectedRevision) {
+      throw new FirebaseRepositoryError('revision_conflict', 'Incident berubah sebelum snapshot dibuat.', incident);
     }
     const createdAt = now();
     const auditId = auditRef.id;
@@ -708,7 +712,7 @@ export async function restoreVersion(
   return saveIncident(workspaceId, user, restored, {
     action: 'version_restored',
     summary: 'Incident dipulihkan dari version snapshot',
-    versionId,
+    sourceVersionId: versionId,
   });
 }
 
