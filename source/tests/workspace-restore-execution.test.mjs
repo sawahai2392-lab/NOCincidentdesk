@@ -50,7 +50,7 @@ function createDependencies(overrides = {}) {
       return { verifiedCount: count };
     },
     async commitRouteMaster(batchId, metadata) {
-      calls.push(['commit', batchId, metadata.totalCount, metadata.expectedCurrentBatchId]);
+      calls.push(['commit', batchId, metadata.totalCount, metadata.expectedCurrentBatchId, metadata.expectedFingerprint]);
       active.items = routeMaster;
       active.meta = { currentBatchId: batchId };
     },
@@ -110,12 +110,12 @@ test('rejects invalid settings and invalid current snapshot before writes', asyn
   const result = await executeSelectiveWorkspaceRestore(input({ bundle: invalidBundle }), dependencies);
   assert.equal(result.status, 'failed');
   assert.match(result.errors.join(' '), /schema/i);
-  assert.equal(calls.length, 0);
+  assert.equal(calls.some(call => ['start', 'chunk', 'saveSettings', 'commit'].includes(call[0])), false);
 
   const invalidCurrent = await executeSelectiveWorkspaceRestore(input({ currentSettings: { groups: [] } }), dependencies);
   assert.equal(invalidCurrent.status, 'failed');
   assert.match(invalidCurrent.errors.join(' '), /snapshot/i);
-  assert.equal(calls.length, 0);
+  assert.equal(calls.some(call => ['start', 'chunk', 'saveSettings', 'commit'].includes(call[0])), false);
 });
 
 test('stages chunks, verifies them, writes settings, and commits last', async () => {
