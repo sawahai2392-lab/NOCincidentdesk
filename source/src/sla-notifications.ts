@@ -1,4 +1,4 @@
-import { incidentSlaState, type Incident, type SettingsData } from './domain';
+import { incidentSlaState, type Incident, type SettingsData } from './domain.ts';
 
 export type SlaNoticeStage = 'due_soon' | 'overdue' | 'escalated' | 'critical';
 
