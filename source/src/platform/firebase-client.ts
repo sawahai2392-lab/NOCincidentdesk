@@ -18,6 +18,7 @@ import {
   createVersion,
   duplicateIncident,
   ensureWorkspace,
+  exportWorkspaceBackup,
   getInvite,
   getRouteMaster,
   joinWorkspace,
@@ -107,6 +108,11 @@ async function getRequest(path: string): Promise<ApiResult> {
     const user = firebaseAuth.currentUser;
     if (!user) throw new FirebaseApiError('auth_required', 'Sesi login tidak ditemukan.', 401);
     return ok(await bootstrapWorkspace(user));
+  }
+
+  if (path === '/api/workspace/export') {
+    const { profile, user } = await context();
+    return ok({ bundle: await exportWorkspaceBackup(profile.workspaceId, user) });
   }
 
   if (path === '/api/route-master') {
