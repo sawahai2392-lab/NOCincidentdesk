@@ -4,6 +4,10 @@ on:
   pull_request:
     branches:
       - feat/tt-editor-quick-updates
+      - feat/firebase-spark-migration
+      - 'fix/phase1-*'
+      - 'fix/phase2-*'
+      - 'fix/phase3-*'
   workflow_dispatch:
 
 permissions:
