@@ -4,7 +4,7 @@ import { read, type WorkBook } from 'xlsx';
 
 import TextareaAutosize from 'react-textarea-autosize';
 import { Toaster, toast as sonnerToast } from 'sonner';
-import { api, auth, image, invitesClient, notifications, ws } from '@appdeploy/client';
+import { api, auth, image, invitesClient, notifications, ws } from './platform/firebase-client';
 import { AlertTriangle, Archive, BarChart3, Bell, Check, CheckCircle2, ChevronDown, ChevronLeft, ChevronRight, ClipboardCheck, Clock3, Copy, Database, Download, Edit3, Eye, FileSpreadsheet, FileText, History, LayoutDashboard, Link2, LoaderCircle, LogOut, Map as MapIcon, MapPin, Menu, Moon, MoreHorizontal, Paperclip, Plus, Radio, RotateCcw, Save, ScanLine, Search, Settings, Share2, ShieldCheck, Sun, Trash2, Upload, UserPlus, Users, WandSparkles, WifiOff, X } from 'lucide-react';
 import CutPointTracker from './CutPointTracker';
 import MobileActionSheet from './MobileActionSheet';
@@ -119,6 +119,11 @@ function App() {
     const [draft, setDraft] = useState<Incident | null>(null);
     const [loading, setLoading] = useState(true);
     const [authError, setAuthError] = useState('');
+    const [authMode, setAuthMode] = useState<'signin' | 'register'>('signin');
+    const [authEmail, setAuthEmail] = useState('');
+    const [authPassword, setAuthPassword] = useState('');
+    const [authName, setAuthName] = useState('');
+    const [authBusy, setAuthBusy] = useState(false);
     const [saveState, setSaveState] = useState<'saved' | 'pending' | 'saving' | 'error'>('saved');
     const [theme, setTheme] = useState(() => localStorage.getItem('noc-theme') || 'light');
     const [menuOpen, setMenuOpen] = useState(false);
@@ -246,7 +251,63 @@ function App() {
     useEffect(() => { const handleOnline = () => { setOnline(true); if (draft && JSON.stringify(draft) !== lastSavedRef.current) void persistDraft(draft); }; const handleOffline = () => setOnline(false); window.addEventListener('online', handleOnline); window.addEventListener('offline', handleOffline); const timer = window.setInterval(() => setClock(Date.now()), 60000); return () => { window.removeEventListener('online', handleOnline); window.removeEventListener('offline', handleOffline); window.clearInterval(timer); }; }, [draft]);
     useEffect(() => { if (!draft || !data) return; const serialized = JSON.stringify(draft); if (serialized === lastSavedRef.current) return; storeIncidentRecovery(draft, data.profile.workspaceId, data.profile.userId); }, [draft, data?.profile.workspaceId, data?.profile.userId]);
     useEffect(() => { const blockExit = (event: BeforeUnloadEvent) => { if (saveState === 'pending' || saveState === 'saving' || saveState === 'error') { event.preventDefault(); event.returnValue = ''; } }; window.addEventListener('beforeunload', blockExit); return () => window.removeEventListener('beforeunload', blockExit); }, [saveState]);
-    async function signIn() { setAuthError(''); try { const result = await auth.signIn({ scope: 'openid email profile offline_access' }); setUser(result.user as User); if (!inviteCode) await loadWorkspace(); } catch (err) { const code = (err as { code?: string }).code; setAuthError(code === 'popup_blocked' ? 'Popup login diblokir browser. Izinkan popup lalu coba lagi.' : code === 'popup_closed' ? 'Login dibatalkan.' : errorMessage(err)); } }
+    async function completeAuthentication(nextUser: User) {
+        setUser(nextUser);
+        if (inviteCode) {
+            try {
+                const response = await api.get('/api/invites/' + inviteCode);
+                setInviteInfo({ status: response.data.status });
+            } catch (err) {
+                setInviteInfo({ error: errorMessage(err) });
+            }
+        } else {
+            await loadWorkspace();
+        }
+    }
+    async function signIn() {
+        setAuthError('');
+        setAuthBusy(true);
+        try {
+            const result = await auth.signIn();
+            await completeAuthentication(result.user as User);
+        } catch (err) {
+            setAuthError(errorMessage(err));
+        } finally {
+            setAuthBusy(false);
+        }
+    }
+    async function signInWithPassword() {
+        setAuthError('');
+        setAuthBusy(true);
+        try {
+            const result = await auth.signInWithEmail(authEmail, authPassword);
+            await completeAuthentication(result.user as User);
+        } catch (err) {
+            setAuthError(errorMessage(err));
+        } finally {
+            setAuthBusy(false);
+        }
+    }
+    async function registerWithPassword() {
+        setAuthError('');
+        if (authPassword.length < 12) {
+            setAuthError('Gunakan password minimal 12 karakter.');
+            return;
+        }
+        if (authName.trim().length < 2) {
+            setAuthError('Nama minimal 2 karakter.');
+            return;
+        }
+        setAuthBusy(true);
+        try {
+            const result = await auth.registerWithEmail(authName, authEmail, authPassword);
+            await completeAuthentication(result.user as User);
+        } catch (err) {
+            setAuthError(errorMessage(err));
+        } finally {
+            setAuthBusy(false);
+        }
+    }
     async function signOut() {
         if (saveState === 'saving') { notify('Draft masih disimpan. Tunggu sampai proses selesai, lalu logout lagi.', 'info'); return; }
         if (draft && JSON.stringify(draft) !== lastSavedRef.current) {
@@ -319,7 +380,7 @@ function App() {
     async function readMasterExcel(event: ChangeEvent<HTMLInputElement>) { const file = event.target.files?.[0]; event.target.value = ''; if (!file) return; setMasterImportBusy(true); setMasterImportProgress(0); try { const buffer = await file.arrayBuffer(); let directory: WorkBook; try { directory = read(buffer, { type: 'array', bookSheets: true, bookDeps: false, cellFormula: false, cellHTML: false, WTF: false }); } catch (err) { throw new Error(`Tahap buka workbook gagal: ${errorMessage(err)}`); } if (!directory.SheetNames.length) throw new Error('Workbook tidak memiliki worksheet.'); const sheetName = chooseInitialMasterSheet(directory.SheetNames); let workbook: WorkBook; try { workbook = parseWorkbookSheet(buffer, sheetName); } catch (err) { throw new Error(`Tahap baca worksheet ${sheetName} gagal: ${errorMessage(err)}`); } const detected = detectSheetHeaders(workbook, sheetName); const systemColumn = detected.systemKeyColumn || 'H'; const routeColumn = detected.routeSegmentColumn || 'A'; const previewPairs = extractRouteMasterPairs(workbook, sheetName, systemColumn, routeColumn); if (!previewPairs.length && /^foa active$/i.test(sheetName.trim())) throw new Error(`Worksheet ${sheetName} terbaca, tetapi pasangan ${systemColumn} ↔ ${routeColumn} kosong. Untuk file FOA Mandau gunakan System Key H dan Segment Route A.`); setMasterBuffer(buffer); setMasterSheetNames(directory.SheetNames); setMasterWorkbook(workbook); setMasterFileName(file.name); setMasterSheetName(sheetName); setSystemKeyColumn(systemColumn); setRouteSegmentColumn(routeColumn); setMasterRowCount(worksheetRowCount(workbook, sheetName)); setMasterImportOpen(true); } catch (err) { notify(errorMessage(err), 'error'); } finally { setMasterImportBusy(false); } }
     async function importRouteMaster() { if (!masterImportPairs.length) { notify('Tidak ada pasangan System Key dan Segment Route yang terbaca.', 'error'); return; } if (masterImportPairs.length > 20000) { notify('Master data dibatasi maksimal 20.000 mapping per workspace.', 'error'); return; } setMasterImportBusy(true); setMasterImportProgress(2); try { const start = await api.post('/api/route-master/import/start'); const batchId = String(start.data.batchId || ''); const chunkSize = 400; if (!batchId) throw new Error('Gagal memulai import master data.'); for (let offset = 0; offset < masterImportPairs.length; offset += chunkSize) { const items = masterImportPairs.slice(offset, offset + chunkSize); await api.post('/api/route-master/import/chunk', { batchId, chunkIndex: Math.floor(offset / chunkSize), items }); setMasterImportProgress(Math.min(92, Math.round(((offset + items.length) / masterImportPairs.length) * 90))); } await api.post('/api/route-master/import/commit', { batchId, totalCount: masterImportPairs.length, fileName: masterFileName, sheetName: masterSheetName, systemKeyColumn: systemKeyColumn.toUpperCase(), routeSegmentColumn: routeSegmentColumn.toUpperCase() }); setMasterImportProgress(100); await loadRouteMaster(); setMasterImportOpen(false); notify(`${masterImportPairs.length.toLocaleString('id-ID')} mapping berhasil disimpan ke database online.`, 'success'); } catch (err) { notify(errorMessage(err), 'error'); } finally { setMasterImportBusy(false); } }
     async function createInvite() { if (!/^\S+@\S+\.\S+$/.test(inviteEmail.trim())) { notify('Masukkan email penerima yang valid.', 'error'); return; } if (inviteRole === 'admin') { notify('Role Admin hanya dapat diberikan setelah anggota bergabung.', 'error'); return; } try { const response = await api.post('/api/invites', { email: inviteEmail.trim(), role: inviteRole }); const url = invitesClient.buildJoinUrl(response.data.code, { path: '/' }); setInviteUrl(url); notify('Link undangan aktif selama 7 hari.', 'success'); } catch (err) { notify(errorMessage(err), 'error'); } }
-    async function enableNotifications() { try { await notifications.subscribe(); localStorage.setItem('noc-notifications', 'enabled'); setNotificationReady(true); notify('Notifikasi SLA dan perubahan status sudah aktif di perangkat ini.', 'success'); } catch (err) { notify(errorMessage(err), 'error'); } }
+    async function enableNotifications() { try { await notifications.subscribe(); localStorage.setItem('noc-notifications', 'enabled'); setNotificationReady(true); notify('Izin notifikasi browser aktif saat aplikasi terbuka.', 'success'); } catch (err) { notify(errorMessage(err), 'error'); } }
     async function updateMemberRole(memberId: string, role: Role) { try { await api.put(`/api/members/${memberId}`, { role }); await loadWorkspace(); notify('Role anggota diperbarui.', 'success'); } catch (err) { notify(errorMessage(err), 'error'); } }
     async function removeMember(memberId: string, name: string) { if (!window.confirm(`Keluarkan ${name} dari workspace?`)) return; try { await api.delete(`/api/members/${memberId}`); await loadWorkspace(); notify('Anggota dikeluarkan dari workspace.', 'success'); } catch (err) { notify(errorMessage(err), 'error'); } }
     const allIncidents = useMemo(() => [...(data?.incidents || [])].sort((a, b) => b.updatedAt - a.updatedAt), [data?.incidents]);
@@ -331,7 +392,15 @@ function App() {
     const role = data?.profile.role || 'operator'; const isAdmin = role === 'admin'; const canReview = role !== 'operator';
     useEffect(() => { const handleRunningShortcut = (event: KeyboardEvent) => { const target = event.target as HTMLElement | null; const typing = Boolean(target?.closest('input,textarea,select,[contenteditable=true]')); if ((event.ctrlKey || event.metaKey) && event.key.toLowerCase() === 'k') { event.preventDefault(); if (event.shiftKey) setRunningSwitcherOpen(true); else setCommandOpen(true); return; } if (!typing && event.altKey && (event.key === 'ArrowUp' || event.key === 'ArrowDown') && runningItems.length) { event.preventDefault(); const currentIndex = Math.max(0, runningItems.findIndex(item => item.incident.id === draft?.id)); const delta = event.key === 'ArrowDown' ? 1 : -1; const next = runningItems[(currentIndex + delta + runningItems.length) % runningItems.length]; if (next) void switchIncident(next.incident); } }; window.addEventListener('keydown', handleRunningShortcut); return () => window.removeEventListener('keydown', handleRunningShortcut); }, [runningItems, draft]);
     if (loading && !data) return <div className='splash'><div className='brand-mark'><Radio /></div><div className='loader'/><p>Menyiapkan Incident Desk…</p></div>;
-    if (!user) return <div className='auth-shell'><section className='auth-story'><div className='brand-lockup'><span className='brand-mark'><Radio /></span><div><b>NOC Incident Desk</b><small>Operational reporting, without the noise.</small></div></div><div className='auth-copy'><Badge tone='cyan'><ShieldCheck size={13}/> Secure workspace</Badge><h1>Satu ruang kerja untuk setiap gangguan.</h1><p>Susun bagan, koordinasikan progress, dan kirim update yang konsisten—bahkan saat situasi sedang sibuk.</p></div><div className='auth-preview'><div className='auth-preview-top'><span>Live incident</span><Badge tone='danger'>Critical</Badge></div><strong>DOWN · KARAWANG CITY ↔ KIIC</strong><div className='mini-timeline'><i /><span><b>00:05</b> OTDR FO CUT at KM 5</span><i /><span><b>01:10</b> Physical CP ditemukan</span><i className='active'/><span><b>06:47</b> Link normal · TT closed</span></div></div></section><section className='auth-panel'><div className='auth-card'><span className='mobile-brand'><Radio /> NOC Incident Desk</span><h2>{inviteCode ? 'Undangan tim diterima' : 'Selamat datang'}</h2><p>{inviteCode ? 'Masuk untuk bergabung ke workspace NOC yang mengundang lo.' : 'Masuk untuk membuka workspace incident lo.'}</p>{inviteInfo?.error && <div className='inline-error'>{inviteInfo.error}</div>}{authError && <div className='inline-error'>{authError}</div>}<Button variant='primary' icon={<ShieldCheck size={18}/>} onClick={() => void signIn()}>Masuk dengan akun</Button><small className='legal'>Dengan melanjutkan, lo menyetujui <a href='/resources/terms-and-conditions.html' target='_blank' rel='noreferrer'>ketentuan</a> dan <a href='/resources/privacy-policy.html' target='_blank' rel='noreferrer'>kebijakan privasi</a>.</small></div></section></div>;
+    if (!user) return <div className='auth-shell'><section className='auth-story'><div className='brand-lockup'><span className='brand-mark'><Radio /></span><div><b>NOC Incident Desk</b><small>Operational reporting, without the noise.</small></div></div><div className='auth-copy'><Badge tone='cyan'><ShieldCheck size={13}/> Secure workspace</Badge><h1>Satu ruang kerja untuk setiap gangguan.</h1><p>Susun bagan, koordinasikan progress, dan kirim update yang konsisten—bahkan saat situasi sedang sibuk.</p></div><div className='auth-preview'><div className='auth-preview-top'><span>Live incident</span><Badge tone='danger'>Critical</Badge></div><strong>DOWN · KARAWANG CITY ↔ KIIC</strong><div className='mini-timeline'><i /><span><b>00:05</b> OTDR FO CUT at KM 5</span><i /><span><b>01:10</b> Physical CP ditemukan</span><i className='active'/><span><b>06:47</b> Link normal · TT closed</span></div></div></section><section className='auth-panel'><div className='auth-card'><span className='mobile-brand'><Radio /> NOC Incident Desk</span><h2>{inviteCode ? 'Undangan tim diterima' : 'Selamat datang'}</h2><p>{inviteCode ? 'Masuk untuk bergabung ke workspace NOC yang mengundang lo.' : 'Masuk untuk membuka workspace incident lo.'}</p>{inviteInfo?.error && <div className='inline-error'>{inviteInfo.error}</div>}{authError && <div className='inline-error'>{authError}</div>}<div className='firebase-auth-form'>
+{authMode === 'register' && <label>Nama lengkap<input type='text' autoComplete='name' value={authName} onChange={event => setAuthName(event.target.value)} placeholder='Nama pengguna' /></label>}
+<label>Email kerja<input type='email' autoComplete='email' value={authEmail} onChange={event => setAuthEmail(event.target.value)} placeholder='nama@perusahaan.com' /></label>
+<label>Password<input type='password' autoComplete={authMode === 'register' ? 'new-password' : 'current-password'} value={authPassword} onChange={event => setAuthPassword(event.target.value)} placeholder={authMode === 'register' ? 'Minimal 12 karakter' : 'Masukkan password'} onKeyDown={event => { if (event.key === 'Enter' && !authBusy) void (authMode === 'register' ? registerWithPassword() : signInWithPassword()); }} /></label>
+<Button block variant='primary' icon={authBusy ? <LoaderCircle className='spin' size={17}/> : <ShieldCheck size={18}/>} disabled={authBusy || !authEmail.trim() || !authPassword} onClick={() => void (authMode === 'register' ? registerWithPassword() : signInWithPassword())}>{authBusy ? 'Memproses…' : authMode === 'register' ? 'Buat akun dan workspace' : 'Masuk dengan email'}</Button>
+<div className='firebase-auth-divider'><span>atau</span></div>
+<Button block variant='ghost' icon={<ShieldCheck size={18}/>} disabled={authBusy} onClick={() => void signIn()}>Lanjutkan dengan Google</Button>
+<button type='button' className='firebase-auth-toggle' onClick={() => { setAuthMode(mode => mode === 'signin' ? 'register' : 'signin'); setAuthError(''); }}>{authMode === 'register' ? 'Sudah punya akun? Masuk' : 'Belum punya akun? Buat akun'}</button>
+</div><small className='legal'>Dengan melanjutkan, lo menyetujui <a href='/resources/terms-and-conditions.html' target='_blank' rel='noreferrer'>ketentuan</a> dan <a href='/resources/privacy-policy.html' target='_blank' rel='noreferrer'>kebijakan privasi</a>.</small></div></section></div>;
     if (inviteCode) return <div className='join-shell'><div className='join-card'><span className='brand-mark large'><UserPlus /></span><Badge tone={inviteInfo?.error || joinError ? 'danger' : 'cyan'}>{inviteInfo?.status || 'Invitation'}</Badge><h1>Bergabung ke workspace NOC?</h1><p>Akun <strong>{user.email || user.name}</strong> akan ditambahkan ke tim. Data workspace pribadi yang sudah ada tidak akan ditimpa.</p>{inviteInfo?.error && <div className='inline-error'>{inviteInfo.error}</div>}{joinError && <div className='inline-error'>{joinError}</div>}<div className='join-actions'><Button variant='ghost' onClick={() => { invitesClient.clearPendingCode(); setInviteCode(null); setJoinError(''); void loadWorkspace(); }} disabled={joinBusy}>Abaikan</Button><Button variant='primary' icon={joinBusy ? <LoaderCircle className='spin' size={17}/> : <UserPlus size={17}/>} onClick={() => void joinWorkspace()} disabled={Boolean(inviteInfo?.error) || joinBusy}>{joinBusy ? 'Menggabungkan…' : 'Gabung workspace'}</Button></div></div></div>;
     if (!data) return <div className='fatal-state'><h2>Workspace belum dapat dibuka</h2><p>{authError}</p><Button variant='primary' onClick={() => void loadWorkspace()}>Coba lagi</Button></div>;
     const navItems: Array<{ id: View; label: string; icon: ReactNode; hidden?: boolean }> = [{ id: 'dashboard', label: 'Ringkasan', icon: <LayoutDashboard size={18}/> }, { id: 'operations', label: 'Operations', icon: <Bell size={18}/> }, { id: 'reliability', label: 'Reliability', icon: <BarChart3 size={18}/> }, { id: 'risk', label: 'Risk Radar', icon: <ScanLine size={18}/> }, { id: 'archive', label: 'Insiden', icon: <Archive size={18}/> }, { id: 'tracker', label: 'Peta Cut Point', icon: <MapIcon size={18}/> }, { id: 'handover', label: 'Shift Handover', icon: <ClipboardCheck size={18}/> }, { id: 'trash', label: 'Trash', icon: <Trash2 size={18}/>, hidden: !isAdmin }, { id: 'settings', label: 'Template', icon: <Settings size={18}/>, hidden: !isAdmin }, { id: 'team', label: 'Tim', icon: <Users size={18}/> }];
