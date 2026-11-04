@@ -1,4 +1,4 @@
-import { collection, doc, getDoc, getDocs, limit, query, where } from 'firebase/firestore';
+import { collection, doc, getDoc, getDocs, limit, query } from 'firebase/firestore';
 import { firebaseAuth, firestore } from './firebase';
 import {
   getCurrentIdToken,
@@ -38,8 +38,7 @@ import {
 } from './firebase-repositories';
 import type { Incident, Role } from '../domain';
 
-type ApiResult<T = Record<string, unknown>> = { data: T };
-type ApiMethod = 'GET' | 'POST' | 'PUT' | 'DELETE';
+type ApiResult<T = unknown> = { data: T };
 
 class FirebaseApiError extends Error {
   code: string;
