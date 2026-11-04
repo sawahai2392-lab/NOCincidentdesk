@@ -188,6 +188,88 @@ export const routeMasterItems = pgTable(
   })
 );
 
+
+/**
+ * Transitional document store used by the compatibility layer while the
+ * AppDeploy table API is migrated into normalized domain repositories.
+ * New features must use typed relational tables above, not this table.
+ */
+export const legacyDocuments = pgTable(
+  "legacy_documents",
+  {
+    namespace: varchar("namespace", { length: 240 }).notNull(),
+    documentId: varchar("document_id", { length: 240 }).notNull(),
+    payload: jsonb("payload").$type<Record<string, unknown>>().notNull(),
+    createdAt: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
+    updatedAt: timestamp("updated_at", { withTimezone: true }).defaultNow().notNull()
+  },
+  (table) => ({
+    namespaceDocumentUnique: uniqueIndex("legacy_documents_namespace_document_uq").on(
+      table.namespace,
+      table.documentId
+    ),
+    namespaceIndex: index("legacy_documents_namespace_idx").on(table.namespace)
+  })
+);
+
+export const workspaceInvitations = pgTable(
+  "workspace_invitations",
+  {
+    id: uuid("id").defaultRandom().primaryKey(),
+    tokenHash: varchar("token_hash", { length: 64 }).notNull(),
+    workspaceId: uuid("workspace_id")
+      .notNull()
+      .references(() => workspaces.id, { onDelete: "cascade" }),
+    invitedEmail: varchar("invited_email", { length: 320 }).notNull(),
+    invitedRole: workspaceRole("invited_role").notNull().default("operator"),
+    createdBy: text("created_by").notNull(),
+    context: jsonb("context").$type<Record<string, unknown>>().notNull().default({}),
+    expiresAt: timestamp("expires_at", { withTimezone: true }).notNull(),
+    redeemedAt: timestamp("redeemed_at", { withTimezone: true }),
+    revokedAt: timestamp("revoked_at", { withTimezone: true }),
+    createdAt: timestamp("created_at", { withTimezone: true }).defaultNow().notNull()
+  },
+  (table) => ({
+    tokenHashUnique: uniqueIndex("workspace_invitations_token_hash_uq").on(table.tokenHash),
+    workspaceIndex: index("workspace_invitations_workspace_idx").on(table.workspaceId)
+  })
+);
+
+export const webPushSubscriptions = pgTable(
+  "web_push_subscriptions",
+  {
+    id: uuid("id").defaultRandom().primaryKey(),
+    userId: text("user_id").notNull(),
+    endpoint: text("endpoint").notNull(),
+    subscription: jsonb("subscription").$type<Record<string, unknown>>().notNull(),
+    createdAt: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
+    updatedAt: timestamp("updated_at", { withTimezone: true }).defaultNow().notNull()
+  },
+  (table) => ({
+    endpointUnique: uniqueIndex("web_push_subscriptions_endpoint_uq").on(table.endpoint),
+    userIndex: index("web_push_subscriptions_user_idx").on(table.userId)
+  })
+);
+
+export const userNotifications = pgTable(
+  "user_notifications",
+  {
+    id: uuid("id").defaultRandom().primaryKey(),
+    userId: text("user_id").notNull(),
+    title: varchar("title", { length: 200 }).notNull(),
+    body: varchar("body", { length: 500 }).notNull(),
+    payload: jsonb("payload").$type<Record<string, unknown>>().notNull().default({}),
+    readAt: timestamp("read_at", { withTimezone: true }),
+    createdAt: timestamp("created_at", { withTimezone: true }).defaultNow().notNull()
+  },
+  (table) => ({
+    userCreatedIndex: index("user_notifications_user_created_idx").on(
+      table.userId,
+      table.createdAt
+    )
+  })
+);
+
 export type Workspace = typeof workspaces.$inferSelect;
 export type WorkspaceMember = typeof workspaceMembers.$inferSelect;
 export type IncidentRecord = typeof incidents.$inferSelect;
