@@ -1,5 +1,6 @@
 import { sql } from "drizzle-orm";
 import {
+  boolean,
   index,
   integer,
   jsonb,
@@ -34,7 +35,7 @@ export const incidentSeverity = pgEnum("incident_severity", [
 ]);
 
 export const workspaces = pgTable("workspaces", {
-  id: uuid("id").defaultRandom().primaryKey(),
+  id: varchar("id", { length: 240 }).primaryKey(),
   name: varchar("name", { length: 200 }).notNull(),
   ownerUserId: text("owner_user_id").notNull(),
   createdAt: timestamp("created_at", { withTimezone: true }).defaultNow().notNull()
@@ -44,7 +45,7 @@ export const workspaceMembers = pgTable(
   "workspace_members",
   {
     id: uuid("id").defaultRandom().primaryKey(),
-    workspaceId: uuid("workspace_id")
+    workspaceId: varchar("workspace_id", { length: 240 })
       .notNull()
       .references(() => workspaces.id, { onDelete: "cascade" }),
     userId: text("user_id").notNull(),
@@ -67,7 +68,7 @@ export const workspaceSettings = pgTable(
   "workspace_settings",
   {
     id: uuid("id").defaultRandom().primaryKey(),
-    workspaceId: uuid("workspace_id")
+    workspaceId: varchar("workspace_id", { length: 240 })
       .notNull()
       .references(() => workspaces.id, { onDelete: "cascade" }),
     data: jsonb("data").$type<Record<string, unknown>>().notNull().default({}),
@@ -83,7 +84,7 @@ export const incidents = pgTable(
   "incidents",
   {
     id: uuid("id").defaultRandom().primaryKey(),
-    workspaceId: uuid("workspace_id")
+    workspaceId: varchar("workspace_id", { length: 240 })
       .notNull()
       .references(() => workspaces.id, { onDelete: "cascade" }),
     identityMode: varchar("identity_mode", { length: 16 }).notNull().default("standard"),
@@ -119,7 +120,7 @@ export const incidentVersions = pgTable(
   "incident_versions",
   {
     id: uuid("id").defaultRandom().primaryKey(),
-    workspaceId: uuid("workspace_id")
+    workspaceId: varchar("workspace_id", { length: 240 })
       .notNull()
       .references(() => workspaces.id, { onDelete: "cascade" }),
     incidentId: uuid("incident_id")
@@ -143,7 +144,7 @@ export const incidentAuditLogs = pgTable(
   "incident_audit_logs",
   {
     id: uuid("id").defaultRandom().primaryKey(),
-    workspaceId: uuid("workspace_id")
+    workspaceId: varchar("workspace_id", { length: 240 })
       .notNull()
       .references(() => workspaces.id, { onDelete: "cascade" }),
     incidentId: uuid("incident_id")
@@ -170,7 +171,7 @@ export const routeMasterItems = pgTable(
   "route_master_items",
   {
     id: uuid("id").defaultRandom().primaryKey(),
-    workspaceId: uuid("workspace_id")
+    workspaceId: varchar("workspace_id", { length: 240 })
       .notNull()
       .references(() => workspaces.id, { onDelete: "cascade" }),
     systemKey: varchar("system_key", { length: 180 }).notNull(),
@@ -194,6 +195,82 @@ export const routeMasterItems = pgTable(
  * AppDeploy table API is migrated into normalized domain repositories.
  * New features must use typed relational tables above, not this table.
  */
+
+export const authUser = pgTable(
+  "user",
+  {
+    id: text("id").primaryKey(),
+    name: text("name").notNull(),
+    email: text("email").notNull(),
+    emailVerified: boolean("email_verified").notNull().default(false),
+    image: text("image"),
+    createdAt: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
+    updatedAt: timestamp("updated_at", { withTimezone: true }).defaultNow().notNull()
+  },
+  (table) => ({
+    emailUnique: uniqueIndex("user_email_uq").on(table.email)
+  })
+);
+
+export const authSession = pgTable(
+  "session",
+  {
+    id: text("id").primaryKey(),
+    expiresAt: timestamp("expires_at", { withTimezone: true }).notNull(),
+    token: text("token").notNull(),
+    createdAt: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
+    updatedAt: timestamp("updated_at", { withTimezone: true }).defaultNow().notNull(),
+    ipAddress: text("ip_address"),
+    userAgent: text("user_agent"),
+    userId: text("user_id").notNull().references(() => authUser.id, { onDelete: "cascade" })
+  },
+  (table) => ({
+    tokenUnique: uniqueIndex("session_token_uq").on(table.token),
+    userIndex: index("session_user_idx").on(table.userId)
+  })
+);
+
+export const authAccount = pgTable(
+  "account",
+  {
+    id: text("id").primaryKey(),
+    accountId: text("account_id").notNull(),
+    providerId: text("provider_id").notNull(),
+    userId: text("user_id").notNull().references(() => authUser.id, { onDelete: "cascade" }),
+    accessToken: text("access_token"),
+    refreshToken: text("refresh_token"),
+    idToken: text("id_token"),
+    accessTokenExpiresAt: timestamp("access_token_expires_at", { withTimezone: true }),
+    refreshTokenExpiresAt: timestamp("refresh_token_expires_at", { withTimezone: true }),
+    scope: text("scope"),
+    password: text("password"),
+    createdAt: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
+    updatedAt: timestamp("updated_at", { withTimezone: true }).defaultNow().notNull()
+  },
+  (table) => ({
+    userIndex: index("account_user_idx").on(table.userId),
+    providerAccountUnique: uniqueIndex("account_provider_account_uq").on(
+      table.providerId,
+      table.accountId
+    )
+  })
+);
+
+export const authVerification = pgTable(
+  "verification",
+  {
+    id: text("id").primaryKey(),
+    identifier: text("identifier").notNull(),
+    value: text("value").notNull(),
+    expiresAt: timestamp("expires_at", { withTimezone: true }).notNull(),
+    createdAt: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
+    updatedAt: timestamp("updated_at", { withTimezone: true }).defaultNow().notNull()
+  },
+  (table) => ({
+    identifierIndex: index("verification_identifier_idx").on(table.identifier)
+  })
+);
+
 export const legacyDocuments = pgTable(
   "legacy_documents",
   {
@@ -217,7 +294,7 @@ export const workspaceInvitations = pgTable(
   {
     id: uuid("id").defaultRandom().primaryKey(),
     tokenHash: varchar("token_hash", { length: 64 }).notNull(),
-    workspaceId: uuid("workspace_id")
+    workspaceId: varchar("workspace_id", { length: 240 })
       .notNull()
       .references(() => workspaces.id, { onDelete: "cascade" }),
     invitedEmail: varchar("invited_email", { length: 320 }).notNull(),
