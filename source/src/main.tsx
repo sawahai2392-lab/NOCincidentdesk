@@ -1,6 +1,7 @@
 import { StrictMode } from 'react';
 import { createRoot } from 'react-dom/client';
 import App from './App';
+import PageErrorBoundary from './PageErrorBoundary';
 import './index.css';
 import './firebase-auth.css';
 import './design-system.css';
@@ -35,6 +36,6 @@ import './responsive-viewport-fix.css';
 
 createRoot(document.getElementById('root')!).render(
     <StrictMode>
-        <App />
+        <PageErrorBoundary screenName="NOC Incident Desk"><App /></PageErrorBoundary>
     </StrictMode>
 );
