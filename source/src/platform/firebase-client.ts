@@ -21,6 +21,7 @@ import {
   exportWorkspaceBackup,
   getInvite,
   getRouteMaster,
+  getWorkspaceSettings,
   joinWorkspace,
   loadIncidentPage,
   purgeIncident,
@@ -36,6 +37,7 @@ import {
   startRouteMasterImport,
   subscribeToWorkspace,
   updateMemberRole,
+  verifyRouteMasterImport,
   FirebaseRepositoryError,
   normalizeIncidentSnapshot,
 } from './firebase-repositories';
@@ -63,7 +65,7 @@ class FirebaseApiError extends Error {
 function apiError(error: unknown): FirebaseApiError {
   if (error instanceof FirebaseApiError) return error;
   if (error instanceof FirebaseRepositoryError) {
-    const status = error.code === 'revision_conflict' ? 409
+    const status = error.code === 'revision_conflict' || error.code === 'settings_conflict' || error.code === 'route_master_conflict' ? 409
       : error.code.includes('not_found') ? 404
       : error.code.includes('required') || error.code.includes('invalid') ? 400
       : 403;
@@ -118,6 +120,11 @@ async function getRequest(path: string): Promise<ApiResult> {
   if (path === '/api/route-master') {
     const { profile } = await context();
     return ok(await getRouteMaster(profile.workspaceId));
+  }
+
+  if (path === '/api/settings') {
+    const { profile } = await context();
+    return ok({ settings: await getWorkspaceSettings(profile.workspaceId) });
   }
 
   if (path === '/api/integrations/gemini/status') {
@@ -274,6 +281,17 @@ async function postRequest(path: string, body: Record<string, unknown> = {}): Pr
     return ok({ saved: true });
   }
 
+  if (path === '/api/route-master/import/verify') {
+    if (!user) throw new FirebaseApiError('auth_required', 'Silakan masuk terlebih dahulu.', 401);
+    const result = await verifyRouteMasterImport(
+      profile.workspaceId,
+      String(body.batchId || ''),
+      Number(body.expectedCount || 0),
+      String(body.expectedFingerprint || ''),
+    );
+    return ok(result);
+  }
+
   if (path === '/api/route-master/import/commit') {
     if (!user) throw new FirebaseApiError('auth_required', 'Silakan masuk terlebih dahulu.', 401);
     await commitRouteMasterImport(profile.workspaceId, user, String(body.batchId || ''), body);
@@ -346,7 +364,10 @@ async function putRequest(path: string, body: Record<string, unknown> = {}): Pro
   if (!user) throw new FirebaseApiError('auth_required', 'Silakan masuk terlebih dahulu.', 401);
 
   if (path === '/api/settings') {
-    return ok({ settings: await saveSettings(profile.workspaceId, user, body as never) });
+    const payload = { ...body };
+    const expectedUpdatedAt = typeof payload._expectedUpdatedAt === 'number' ? payload._expectedUpdatedAt : undefined;
+    delete payload._expectedUpdatedAt;
+    return ok({ settings: await saveSettings(profile.workspaceId, user, payload as never, expectedUpdatedAt) });
   }
 
   const incidentMatch = path.match(/^\/api\/incidents\/([^/]+)$/);

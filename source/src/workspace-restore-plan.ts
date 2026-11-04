@@ -45,6 +45,7 @@ export function planSelectiveWorkspaceRestore(
   if (selection.routeMaster) {
     if (capabilities.get('routeMaster') !== 'admin-writable') errors.push('Route Master is not writable under the current restore policy.');
     else if (!Array.isArray(record.data?.routeMaster) || record.data.routeMaster.length === 0) errors.push('Route Master restore requires at least one valid mapping because the current import API does not commit empty batches.');
+    else if (record.data.routeMaster.length > 20000) errors.push('Route Master restore is limited to 20,000 mappings per workspace.');
     else selected.push('routeMaster');
   }
   if (!selected.length && !errors.length) errors.push('Select at least one supported restore section.');

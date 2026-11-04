@@ -12,8 +12,7 @@ on:
       - 'feat/phase11-*'
       - 'feat/phase12-*'
       - 'feat/phase13-*'
-      - 'feat/phase12-*'
-      - 'feat/phase13-*'
+      - 'feat/phase14-*'
   pull_request:
     branches:
       - feat/tt-editor-quick-updates
@@ -29,6 +28,9 @@ on:
       - 'fix/phase9-*'
       - 'feat/phase10-*'
       - 'feat/phase11-*'
+      - 'feat/phase12-*'
+      - 'feat/phase13-*'
+      - 'feat/phase14-*'
   workflow_dispatch:
 
 permissions:
@@ -107,4 +109,12 @@ jobs:
       - name: Selective workspace restore planner tests
         working-directory: source
         run: npm run test:restore-plan
+
+      - name: Route Master staging integrity tests
+        working-directory: source
+        run: npm run test:route-integrity
+
+      - name: Selective workspace restore execution tests
+        working-directory: source
+        run: npm run test:restore-execution
 
