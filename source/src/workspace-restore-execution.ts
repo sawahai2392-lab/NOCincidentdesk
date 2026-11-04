@@ -188,12 +188,6 @@ export async function executeSelectiveWorkspaceRestore(
 
   const completedSections: WorkspaceRestoreExecutionResult['completedSections'] = [];
   let expectedCurrentBatchId: string | null = null;
-  if (input.selection.routeMaster) {
-    const currentActive = await dependencies.readActiveRouteMaster();
-    expectedCurrentBatchId = typeof currentActive.meta?.currentBatchId === 'string'
-      ? currentActive.meta.currentBatchId
-      : null;
-  }
   let settingsUpdatedAtAfterApply: number | null = null;
   const warnings = [
     'Members, incidents, audit trail, dan version history tidak disentuh.',
@@ -207,6 +201,10 @@ export async function executeSelectiveWorkspaceRestore(
 
   try {
     if (input.selection.routeMaster) {
+      const currentActive = await dependencies.readActiveRouteMaster();
+      expectedCurrentBatchId = typeof currentActive.meta?.currentBatchId === 'string' && currentActive.meta.currentBatchId
+        ? currentActive.meta.currentBatchId
+        : null;
       emit(dependencies, 'staging-route-master', 0, routeMaster.length, 'Membuat batch Route Master terpisah.');
       stagedBatchId = await dependencies.startRouteMasterImport();
       if (!stagedBatchId.trim()) throw new Error('Batch staging Route Master tidak berhasil dibuat.');
