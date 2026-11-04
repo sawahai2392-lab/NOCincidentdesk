@@ -2,8 +2,264 @@ rules_version = '2';
 
 service cloud.firestore {
   match /databases/{database}/documents {
-    // Default-deny while the workspace model and role rules are implemented.
-    // Never deploy permissive test rules to the production Firebase project.
+    function signedIn() {
+      return request.auth != null;
+    }
+
+    function memberPath(workspaceId, uid) {
+      return /databases/$(database)/documents/workspaces/$(workspaceId)/members/$(uid);
+    }
+
+    function workspacePath(workspaceId) {
+      return /databases/$(database)/documents/workspaces/$(workspaceId);
+    }
+
+    function activeMember(workspaceId) {
+      return signedIn()
+        && exists(memberPath(workspaceId, request.auth.uid))
+        && get(memberPath(workspaceId, request.auth.uid)).data.status == 'active';
+    }
+
+    function memberRole(workspaceId) {
+      return get(memberPath(workspaceId, request.auth.uid)).data.role;
+    }
+
+    function isAdmin(workspaceId) {
+      return activeMember(workspaceId) && memberRole(workspaceId) == 'admin';
+    }
+
+    function canReview(workspaceId) {
+      return activeMember(workspaceId)
+        && (memberRole(workspaceId) == 'admin' || memberRole(workspaceId) == 'supervisor');
+    }
+
+    function invitationPath(code) {
+      return /databases/$(database)/documents/workspaceInvites/$(code);
+    }
+
+    function invitationRedeemedFor(workspaceId, memberUid) {
+      return signedIn()
+        && request.resource.data.inviteCode is string
+        && existsAfter(invitationPath(request.resource.data.inviteCode))
+        && getAfter(invitationPath(request.resource.data.inviteCode)).data.status == 'joined'
+        && getAfter(invitationPath(request.resource.data.inviteCode)).data.joinedBy == memberUid
+        && getAfter(invitationPath(request.resource.data.inviteCode)).data.workspaceId == workspaceId
+        && getAfter(invitationPath(request.resource.data.inviteCode)).data.email == request.auth.token.email;
+    }
+
+    function allowedIncidentFields() {
+      return [
+        'id', 'identityMode', 'b2bTitle', 'group', 'status', 'severity', 'condition',
+        'linkA', 'linkB', 'routeSegment', 'systemKey', 'parentIncidentId',
+        'incidentId', 'titleOverride', 'mduTicket', 'occurTime', 'dispatchTime',
+        'closedTime', 'picArea', 'picName', 'rootCause', 'cutPoint', 'action',
+        'reporter', 'internalNotes', 'impacts', 'progress', 'attachments',
+        'cutPoints', 'geoCoordinates', 'checklist', 'closingEvidenceNote',
+        'assignedToUserId', 'assignedToName', 'acknowledgedAt', 'acknowledgedBy',
+        'handoverNote', 'handoverAt', 'handoverBy', 'reopenReason', 'resolvedAt',
+        'resolvedBy', 'deletedAt', 'deletedBy', 'deleteReason', 'createdAt',
+        'createdBy', 'updatedAt', 'updatedBy', 'revision', 'normalizedIncidentId'
+      ];
+    }
+
+    function protectedIncidentChange() {
+      return request.resource.data.diff(resource.data).affectedKeys()
+        .hasAny(['deletedAt', 'deletedBy', 'deleteReason']);
+    }
+
+    function statusChangeNeedsReview() {
+      return request.resource.data.diff(resource.data).affectedKeys().hasAny(['status'])
+        && (request.resource.data.status == 'Resolved' || request.resource.data.status == 'Closed');
+    }
+
+    match /users/{uid} {
+      allow get: if signedIn() && request.auth.uid == uid;
+      allow list: if false;
+
+      allow create: if signedIn()
+        && request.auth.uid == uid
+        && request.resource.data.uid == uid
+        && request.resource.data.workspaceId is string
+        && existsAfter(memberPath(request.resource.data.workspaceId, uid))
+        && getAfter(memberPath(request.resource.data.workspaceId, uid)).data.status == 'active';
+
+      allow update: if signedIn()
+        && request.auth.uid == uid
+        && request.resource.data.workspaceId == resource.data.workspaceId
+        && request.resource.data.uid == resource.data.uid
+        && request.resource.data.diff(resource.data).affectedKeys()
+          .hasOnly(['name', 'photoURL', 'updatedAt']);
+
+      allow delete: if false;
+    }
+
+    match /workspaces/{workspaceId} {
+      allow get: if activeMember(workspaceId);
+      allow list: if false;
+
+      allow create: if signedIn()
+        && request.resource.data.ownerUid == request.auth.uid
+        && existsAfter(memberPath(workspaceId, request.auth.uid))
+        && getAfter(memberPath(workspaceId, request.auth.uid)).data.role == 'admin';
+
+      allow update: if isAdmin(workspaceId)
+        && request.resource.data.ownerUid == resource.data.ownerUid
+        && request.resource.data.diff(resource.data).affectedKeys()
+          .hasOnly(['name', 'updatedAt', 'status']);
+
+      allow delete: if false;
+
+      match /members/{memberUid} {
+        allow get: if (signedIn() && memberUid == request.auth.uid) || activeMember(workspaceId);
+        allow list: if activeMember(workspaceId);
+
+        allow create: if signedIn()
+          && memberUid == request.auth.uid
+          && request.resource.data.userId == memberUid
+          && request.resource.data.workspaceId == workspaceId
+          && request.resource.data.status == 'active'
+          && (
+            (
+              request.resource.data.role == 'admin'
+              && getAfter(workspacePath(workspaceId)).data.ownerUid == request.auth.uid
+            )
+            ||
+            (
+              request.resource.data.role in ['operator', 'supervisor']
+              && invitationRedeemedFor(workspaceId, memberUid)
+            )
+          );
+
+        allow update: if isAdmin(workspaceId)
+          && memberUid != request.auth.uid
+          && request.resource.data.userId == resource.data.userId
+          && request.resource.data.workspaceId == resource.data.workspaceId
+          && request.resource.data.diff(resource.data).affectedKeys()
+            .hasOnly(['role', 'status', 'removedAt']);
+
+        allow delete: if isAdmin(workspaceId) && memberUid != request.auth.uid;
+      }
+
+      match /settings/{settingId} {
+        allow get, list: if activeMember(workspaceId);
+        allow create: if signedIn()
+          && getAfter(workspacePath(workspaceId)).data.ownerUid == request.auth.uid
+          && getAfter(memberPath(workspaceId, request.auth.uid)).data.role == 'admin';
+        allow update: if isAdmin(workspaceId);
+        allow delete: if false;
+      }
+
+      match /incidents/{incidentId} {
+        allow get, list: if activeMember(workspaceId);
+
+        allow create: if activeMember(workspaceId)
+          && request.resource.data.createdBy == request.auth.uid
+          && request.resource.data.updatedBy == request.auth.uid
+          && request.resource.data.revision == 1
+          && request.resource.data.deletedAt == 0
+          && request.resource.data.keys().hasOnly(allowedIncidentFields());
+
+        allow update: if activeMember(workspaceId)
+          && request.resource.data.createdBy == resource.data.createdBy
+          && request.resource.data.createdAt == resource.data.createdAt
+          && request.resource.data.updatedBy == request.auth.uid
+          && request.resource.data.revision == resource.data.revision + 1
+          && request.resource.data.keys().hasOnly(allowedIncidentFields())
+          && (!protectedIncidentChange() || isAdmin(workspaceId))
+          && (!statusChangeNeedsReview() || canReview(workspaceId));
+
+        allow delete: if isAdmin(workspaceId) && resource.data.deletedAt > 0;
+
+        match /audit/{auditId} {
+          allow get, list: if activeMember(workspaceId);
+          allow create: if activeMember(workspaceId)
+            && request.resource.data.actorId == request.auth.uid;
+          allow update: if false;
+          allow delete: if isAdmin(workspaceId)
+            && get(/databases/$(database)/documents/workspaces/$(workspaceId)/incidents/$(incidentId)).data.deletedAt > 0;
+        }
+
+        match /versions/{versionId} {
+          allow get, list: if activeMember(workspaceId);
+          allow create: if activeMember(workspaceId)
+            && request.resource.data.createdBy == request.auth.uid
+            && request.resource.data.incident.id == incidentId;
+          allow update: if false;
+          allow delete: if isAdmin(workspaceId)
+            && get(/databases/$(database)/documents/workspaces/$(workspaceId)/incidents/$(incidentId)).data.deletedAt > 0;
+        }
+      }
+
+      match /incidentKeys/{keyId} {
+        allow get, list: if activeMember(workspaceId);
+        allow create, update, delete: if activeMember(workspaceId);
+      }
+
+      match /routeMasterMeta/{metaId} {
+        allow get, list: if activeMember(workspaceId);
+        allow create, update: if isAdmin(workspaceId);
+        allow delete: if false;
+      }
+
+      match /routeMasterBatches/{batchId} {
+        allow get, list: if activeMember(workspaceId);
+        allow create, update: if isAdmin(workspaceId);
+        allow delete: if isAdmin(workspaceId);
+
+        match /chunks/{chunkId} {
+          allow get, list: if activeMember(workspaceId);
+          allow create, update: if isAdmin(workspaceId);
+          allow delete: if isAdmin(workspaceId);
+        }
+      }
+
+      match /notifications/{notificationId} {
+        allow get, list: if activeMember(workspaceId);
+        allow create: if activeMember(workspaceId)
+          && request.resource.data.createdBy == request.auth.uid;
+        allow update: if activeMember(workspaceId)
+          && request.resource.data.diff(resource.data).affectedKeys()
+            .hasOnly(['readAt', 'dismissedAt']);
+        allow delete: if false;
+      }
+    }
+
+    match /workspaceInvites/{inviteCode} {
+      allow get: if signedIn()
+        && (
+          isAdmin(resource.data.workspaceId)
+          || resource.data.email == request.auth.token.email
+        );
+      allow list: if false;
+
+      allow create: if signedIn()
+        && isAdmin(request.resource.data.workspaceId)
+        && request.resource.data.createdBy == request.auth.uid
+        && request.resource.data.status == 'pending'
+        && request.resource.data.role in ['operator', 'supervisor']
+        && request.resource.data.email is string
+        && request.resource.data.expiresAt is number;
+
+      allow update: if (
+        isAdmin(resource.data.workspaceId)
+        && request.resource.data.diff(resource.data).affectedKeys()
+          .hasOnly(['status', 'revokedAt'])
+        && request.resource.data.status == 'revoked'
+      ) || (
+        signedIn()
+        && resource.data.status == 'pending'
+        && resource.data.email == request.auth.token.email
+        && request.resource.data.status == 'joined'
+        && request.resource.data.joinedBy == request.auth.uid
+        && request.resource.data.workspaceId == resource.data.workspaceId
+        && request.resource.data.email == resource.data.email
+        && request.resource.data.diff(resource.data).affectedKeys()
+          .hasOnly(['status', 'joinedAt', 'joinedBy'])
+      );
+
+      allow delete: if isAdmin(resource.data.workspaceId);
+    }
+
     match /{document=**} {
       allow read, write: if false;
     }
