@@ -880,7 +880,7 @@ export async function getWorkspaceRestoreRecovery(
     const chunks = await getDocs(query(
       collection(firestore, workspacePath(workspaceId) + '/routeMasterBatches/' + snapshot.id + '/chunks'),
       orderBy('chunkIndex', 'asc'),
-      limit(50),
+      limit(51),
     ));
     const latestChunkActivityAt = chunks.docs.reduce((latest, chunk) =>
       Math.max(latest, Number(chunk.data().createdAt) || 0), 0);
@@ -893,6 +893,7 @@ export async function getWorkspaceRestoreRecovery(
       ...data,
       id: snapshot.id,
       lastActivityAt,
+      cleanupSupported: chunks.size <= 50,
       stale: snapshot.id !== activeBatchId
         && lastActivityAt > 0
         && currentTime - lastActivityAt >= STALE_ROUTE_MASTER_BATCH_MS,
@@ -1127,8 +1128,8 @@ export async function updateWorkspaceRestoreOperation(
     const updatedAt = now();
     const stage = String(update.stage || current.stage || 'running').slice(0, 80);
     const message = String(update.message || current.message || '').slice(0, 300);
-    const events = Array.isArray(current.events) ? current.events.slice(-29) : [];
-    if (update.stage || update.status !== 'running' || update.message) {
+    const events = Array.isArray(current.events) ? [...current.events] : [];
+    if ((update.stage || update.status !== 'running' || update.message) && events.length < 30) {
       events.push({ at: updatedAt, stage, message, status: update.status });
     }
     const patch: Record<string, unknown> = {
