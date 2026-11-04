@@ -447,6 +447,46 @@ service cloud.firestore {
         allow delete: if false;
       }
 
+      match /integrityRuns/{runId} {
+        allow get, list: if isAdmin(workspaceId);
+
+        allow create: if isAdmin(workspaceId)
+          && request.resource.data.keys().hasOnly([
+            'id', 'kind', 'status', 'createdAt', 'createdBy', 'createdByName',
+            'counts', 'coverage', 'findingCount', 'repairsAvailable', 'findings',
+            'applied', 'skipped', 'errorCount', 'errors', 'operations'
+          ])
+          && request.resource.data.id == runId
+          && request.resource.data.createdAt is int
+          && request.resource.data.createdBy == request.auth.uid
+          && request.resource.data.createdByName is string
+          && (
+            (
+              request.resource.data.kind == 'scan'
+              && request.resource.data.status in ['healthy', 'warning', 'critical']
+              && request.resource.data.counts is map
+              && request.resource.data.coverage is map
+              && request.resource.data.findingCount is int
+              && request.resource.data.repairsAvailable is int
+              && request.resource.data.findings is list
+              && request.resource.data.findings.size() <= 25
+            )
+            || (
+              request.resource.data.kind == 'repair'
+              && request.resource.data.status in ['completed', 'partial']
+              && request.resource.data.applied is int
+              && request.resource.data.skipped is int
+              && request.resource.data.errorCount is int
+              && request.resource.data.errors is list
+              && request.resource.data.errors.size() <= 20
+              && request.resource.data.operations is list
+              && request.resource.data.operations.size() <= 50
+            )
+          );
+
+        allow update, delete: if false;
+      }
+
       match /notifications/{notificationId} {
         allow get, list: if activeMember(workspaceId);
         allow create: if activeMember(workspaceId)
