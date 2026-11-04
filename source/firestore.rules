@@ -394,6 +394,57 @@ service cloud.firestore {
         }
       }
 
+      match /restoreOperations/{operationId} {
+        allow get, list: if isAdmin(workspaceId);
+
+        allow create: if isAdmin(workspaceId)
+          && request.resource.data.createdBy == request.auth.uid
+          && request.resource.data.status == 'running'
+          && request.resource.data.kind in [
+            'selective-restore',
+            'reactivate-route-master',
+            'cleanup-stale-route-master'
+          ]
+          && request.resource.data.createdAt is int
+          && request.resource.data.updatedAt is int
+          && request.resource.data.events is list
+          && request.resource.data.events.size() <= 30
+          && request.resource.data.selectedSections is list
+          && request.resource.data.selectedSections.size() <= 2;
+
+        allow update: if isAdmin(workspaceId)
+          && resource.data.status == 'running'
+          && resource.data.createdBy == request.auth.uid
+          && request.resource.data.createdBy == resource.data.createdBy
+          && request.resource.data.createdAt == resource.data.createdAt
+          && request.resource.data.kind == resource.data.kind
+          && request.resource.data.diff(resource.data).affectedKeys().hasOnly([
+            'status',
+            'stage',
+            'message',
+            'updatedAt',
+            'finishedAt',
+            'events',
+            'errors',
+            'warnings',
+            'stagedBatchId',
+            'activeBatchId',
+            'settingsRolledBack',
+            'deletedChunks'
+          ])
+          && request.resource.data.status in [
+            'running',
+            'completed',
+            'failed',
+            'partial',
+            'needs-review'
+          ]
+          && request.resource.data.events is list
+          && request.resource.data.events.size() <= 30;
+
+        allow delete: if false;
+      }
+
       match /notifications/{notificationId} {
         allow get, list: if activeMember(workspaceId);
         allow create: if activeMember(workspaceId)
