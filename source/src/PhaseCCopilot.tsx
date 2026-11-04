@@ -1,5 +1,5 @@
 import { useState } from 'react';
-import { api } from '@appdeploy/client';
+import { api } from './platform/firebase-client';
 import { AlertTriangle, Check, ClipboardCopy, FileText, LoaderCircle, RefreshCw, Sparkles, WandSparkles } from 'lucide-react';
 import type { Incident } from './domain';
 
