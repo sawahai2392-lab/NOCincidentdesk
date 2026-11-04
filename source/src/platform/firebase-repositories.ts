@@ -1,6 +1,7 @@
 import {
   collection,
   doc,
+  documentId,
   getDoc,
   getDocs,
   limit,
@@ -18,6 +19,7 @@ import {
 } from 'firebase/firestore';
 import type { User } from 'firebase/auth';
 import { firestore } from './firebase';
+import { decodeIncidentPageCursor, encodeIncidentPageCursor } from '../incident-pagination';
 import { isFirestoreIncidentPayloadSafe, measureFirestoreDocumentBytes, MAX_FIRESTORE_INCIDENT_DOCUMENT_BYTES } from '../firestore-payload';
 import {
   defaultSettings,
@@ -187,7 +189,7 @@ export async function bootstrapWorkspace(user: User): Promise<BootstrapData> {
   const workspaceId = context.profile.workspaceId;
 
   const [incidentSnapshot, memberSnapshot, settingsSnapshot] = await Promise.all([
-    getDocs(query(collection(firestore, incidentsPath(workspaceId)), orderBy('updatedAt', 'desc'), limit(100))),
+    getDocs(query(collection(firestore, incidentsPath(workspaceId)), orderBy('updatedAt', 'desc'), orderBy(documentId(), 'desc'), limit(100))),
     getDocs(query(collection(firestore, membersPath(workspaceId)), orderBy('joinedAt', 'asc'), limit(100))),
     getDoc(doc(firestore, settingsPath(workspaceId))),
   ]);
@@ -205,7 +207,10 @@ export async function bootstrapWorkspace(user: User): Promise<BootstrapData> {
     members,
     incidents,
     incidentsNextToken: incidentSnapshot.docs.length === 100
-      ? incidentSnapshot.docs[incidentSnapshot.docs.length - 1].id
+      ? encodeIncidentPageCursor({
+          updatedAt: Number(incidentSnapshot.docs[incidentSnapshot.docs.length - 1].data().updatedAt) || 0,
+          id: incidentSnapshot.docs[incidentSnapshot.docs.length - 1].id,
+        })
       : null,
     settings,
   };
@@ -215,19 +220,25 @@ export async function loadIncidentPage(
   workspaceId: string,
   nextToken: string,
 ): Promise<{ incidents: Incident[]; nextToken: string | null }> {
-  const cursor = await getDoc(doc(firestore, incidentsPath(workspaceId), nextToken));
-  if (!cursor.exists()) return { incidents: [], nextToken: null };
+  const cursor = decodeIncidentPageCursor(nextToken);
+  if (!cursor) {
+    throw new FirebaseRepositoryError('invalid_page_cursor', 'Cursor halaman incident tidak valid. Muat ulang daftar incident.');
+  }
   const snapshot = await getDocs(
     query(
       collection(firestore, incidentsPath(workspaceId)),
       orderBy('updatedAt', 'desc'),
-      startAfter(cursor),
+      orderBy(documentId(), 'desc'),
+      startAfter(cursor.updatedAt, cursor.id),
       limit(100),
     ),
   );
+  const last = snapshot.docs[snapshot.docs.length - 1];
   return {
     incidents: snapshot.docs.map((item) => normalizeIncidentSnapshot(item.data(), item.id)),
-    nextToken: snapshot.docs.length === 100 ? snapshot.docs[snapshot.docs.length - 1].id : null,
+    nextToken: snapshot.docs.length === 100 && last
+      ? encodeIncidentPageCursor({ updatedAt: Number(last.data().updatedAt) || 0, id: last.id })
+      : null,
   };
 }
 
