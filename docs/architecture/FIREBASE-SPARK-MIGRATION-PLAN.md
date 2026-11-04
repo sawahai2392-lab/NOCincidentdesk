@@ -4,6 +4,16 @@
 **Base branch:** `feat/tt-editor-quick-updates`  
 **Billing rule:** Spark only; no billing account, Cloud Functions, or Cloud Storage.
 
+## Implementation snapshot — 4 November 2026
+
+- **Phase 1 — Foundation:** Implemented. Firebase SDK/config, Hosting, emulator configuration, default-deny-to-role-aware Firestore Rules, and CI are present. CI passed TypeScript typecheck, production build, and 11 Firestore Rules emulator tests on source commit `e9880239e2253d7a36ef4bfef32fb7025013d51f`.
+- **Phase 2 — Identity/workspace:** Core flow implemented: email/password and Google Auth, first Admin workspace bootstrap, role from active membership, email-bound expiring invitations, and re-invitation for removed members in the same workspace. Password recovery and complete member-management regression coverage remain.
+- **Phase 3 — Incident domain:** Partial implementation: Firestore repositories, revision transactions, status transition checks, ID duplicate index, Trash/restore, audit/version subcollections, route-master batch import, and listeners exist. Full NOC feature parity and browser-level workflow regression remain. Progress currently lives inside incident documents and needs a size/retention strategy before larger production history is imported.
+- **Phase 4 — Spark replacements:** Partial. Firestore listeners and explicit Spark-unavailable adapter responses exist. Local offline draft and notification behavior still need full verification. Attachments, server-side AI, SMTP, background SLA, and advanced analytics are not implemented.
+- **Phase 5 — Pilot/cutover:** Not started. No AppDeploy export/import has occurred. Keep AppDeploy running and untouched.
+
+The passing CI run verifies the code at the cited source commit. Subsequent changes to the CI trigger configuration are documentation/workflow-only; rerun status for the current PR head is the authoritative latest check. A green CI does not certify data migration or production readiness.
+
 ## Phase 0 — Preserve existing work
 
 - Keep the TT Editor / Quick Update branch as the source baseline.
