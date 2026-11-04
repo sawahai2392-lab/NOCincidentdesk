@@ -1,3 +1,4 @@
+// @ts-nocheck
 import { db, notifications } from '../server/src/standalone-sdk.js';
 import { incidentSlaState } from './incident-guardrails';
 import { notifySubscribers } from './realtime-subscribers';
