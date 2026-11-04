@@ -4,7 +4,7 @@ import { read, type WorkBook } from 'xlsx';
 
 import TextareaAutosize from 'react-textarea-autosize';
 import { Toaster, toast as sonnerToast } from 'sonner';
-import { api, auth, image, invitesClient, notifications, ws } from '@appdeploy/client';
+import { api, auth, image, invitesClient, notifications, ws } from './platform/client';
 import { AlertTriangle, Archive, BarChart3, Bell, Check, CheckCircle2, ChevronDown, ChevronLeft, ChevronRight, ClipboardCheck, Clock3, Copy, Database, Download, Edit3, Eye, FileSpreadsheet, FileText, History, LayoutDashboard, Link2, LoaderCircle, LogOut, Map as MapIcon, MapPin, Menu, Moon, MoreHorizontal, Paperclip, Plus, Radio, RotateCcw, Save, ScanLine, Search, Settings, Share2, ShieldCheck, Sun, Trash2, Upload, UserPlus, Users, WandSparkles, WifiOff, X } from 'lucide-react';
 import CutPointTracker from './CutPointTracker';
 import MobileActionSheet from './MobileActionSheet';
